@@ -14,6 +14,49 @@
 
 ---
 
+## Phase 0: Trait Assignment (自动标注)
+
+### 0.1 概述
+
+**目标**: 使用 ChatGPT API 为 8,000 个高质量 SFT 样本自动分配用户敏感特征（trait）
+
+**详细计划**: 参见 [TRAIT_ASSIGNMENT_PLAN.md](./TRAIT_ASSIGNMENT_PLAN.md)
+
+### 0.2 流程概览
+
+```
+SFT Dataset (95,753)
+    ↓ 筛选 GT ≥ 3
+8,000 samples
+    ↓ ChatGPT API 标注
+Assigned Traits
+    ↓ 过滤违规 GT
+SafeRec Training Data (~7,200 samples)
+```
+
+### 0.3 关键产出
+
+| 输出 | 说明 |
+|------|------|
+| `data/saferec_sft_8k_dataset.json` | 带 assigned_trait 的训练数据 |
+| `data/trait_stats/` | Trait 分布统计和可视化 |
+
+### 0.4 为什么需要这一步？
+
+| 挑战 | Trait Assignment 解决方案 |
+|------|--------------------------|
+| **人工标注成本高** | GPT-4o 自动标注，成本 ~$22 |
+| **Trait 分布不均** | 智能分配确保各 trait 有代表样本 |
+| **GT 噪声** | 自动过滤违反 trait 的 GT 电影 |
+
+### 0.5 实施时间
+
+- 脚本开发: 2-3 天
+- API 调用: ~33 分钟
+- 人工验证: 2 小时
+
+---
+
 ## Phase 1: Title ↔ imdbId 映射构建
 
 ### 1.1 数据源
@@ -166,22 +209,37 @@ safety:
 
 | Phase | 任务 | 依赖 | 状态 |
 |-------|------|------|------|
-| **1.1** | 下载 IMDb title.basics | - | 待开始 |
-| **1.2** | 构建 title→imdbId 映射 | 1.1 | 待开始 |
-| **1.3** | 测试 SFT 数据集覆盖率 | 1.2 | 待开始 |
+| **0.1** | 筛选 GT ≥ 3 的样本 (8k) | - | 待开始 |
+| **0.2** | 开发 GPT 标注脚本 | - | 待开始 |
+| **0.3** | 运行 ChatGPT API 标注 | 0.1, 0.2 | 待开始 |
+| **0.4** | 过滤违规 GT 电影 | 0.3, 1.3 | 待开始 |
+| **0.5** | 统计 Trait 分布 | 0.4 | 待开始 |
+| **1.1** | 下载 IMDb title.basics | - | ✅ 已完成 |
+| **1.2** | 构建 title→imdbId 映射 | 1.1 | ✅ 已完成 |
+| **1.3** | 测试 SFT 数据集覆盖率 | 1.2 | ✅ 已完成 |
 | **2.1** | 实现 SafetyOracle | 1.2 | 待开始 |
-| **3.1** | 实现约束注入模块 | 2.1 | 待开始 |
-| **4.1** | 生成 SafeRec SFT 数据 | 3.1 | 待开始 |
+| **3.1** | 实现约束注入模块 | 2.1, 0.5 | 待开始 |
+| **4.1** | 生成 SafeRec SFT 数据 | 3.1, 0.4 | 待开始 |
 | **5.1** | 修改训练流程 | 4.1 | 待开始 |
 
 ---
 
 ## 预期产出
 
-1. **Title 映射表**: `data/title_to_imdb.pkl`
-2. **SafeRec SFT 数据集**: `downloaded_datasets/processed_datasets/saferec_sft_dataset/`
-3. **新增模块**: `libs/safety_oracle.py`, `libs/constraint_injector.py`
-4. **配置文件**: `configs/saferec_sft.yaml`
+### Phase 0 产出
+1. **Trait 标注数据**: `data/saferec_sft_8k_dataset.json` (8k 样本)
+2. **Trait 分布统计**: `data/trait_stats/stats.json`
+3. **可视化图表**: `data/trait_stats/*.png`
+
+### Phase 1-2 产出
+4. **Title 映射表**: `data/title_to_imdb.pkl` ✅
+5. **映射覆盖率报告**: `data/mapping_coverage_report.json` ✅
+6. **SafetyOracle 模块**: `libs/safety_oracle.py`
+
+### Phase 3-5 产出
+7. **完整 SafeRec SFT 数据集**: `downloaded_datasets/processed_datasets/saferec_sft_dataset/`
+8. **约束注入模块**: `libs/constraint_injector.py`
+9. **配置文件**: `configs/saferec_sft.yaml`
 
 ---
 

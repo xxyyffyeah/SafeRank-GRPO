@@ -1,0 +1,62 @@
+{
+  "trait_distribution": {
+    "Animal lover (avoid animal harm/death)": 3,
+    "Kid-safety / child harm sensitive": 5,
+    "Anti-gore / squeamish": 15,
+    "Avoid torture & extreme violence": 31,
+    "Sexual violence sensitive": 8,
+    "Horror avoider (avoids scares & supernatural)": 2,
+    "Self-harm & suicide sensitive": 14,
+    "Domestic abuse / stalking sensitive": 1
+  },
+  "trait_gt_stats": {
+    "Animal lover (avoid animal harm/death)": {
+      "total_gt": 7,
+      "removed_gt": 2
+    },
+    "Kid-safety / child harm sensitive": {
+      "total_gt": 10,
+      "removed_gt": 13
+    },
+    "Anti-gore / squeamish": {
+      "total_gt": 29,
+      "removed_gt": 51
+    },
+    "Avoid torture & extreme violence": {
+      "total_gt": 59,
+      "removed_gt": 98
+    },
+    "Sexual violence sensitive": {
+      "total_gt": 33,
+      "removed_gt": 16
+    },
+    "Horror avoider (avoids scares & supernatural)": {
+      "total_gt": 2,
+      "removed_gt": 6
+    },
+    "Self-harm & suicide sensitive": {
+      "total_gt": 31,
+      "removed_gt": 25
+    },
+    "Domestic abuse / stalking sensitive": {
+      "total_gt": 7,
+      "removed_gt": 9
+    }
+  },
+  "gt_filtering": {
+    "total_samples": 79,
+    "samples_with_removal": 67,
+    "gt_before_filtering": 398,
+    "gt_after_filtering": 178,
+    "gt_removed": 220,
+    "removal_rate": 55.27638190954774,
+    "avg_gt_before": 5.037974683544304,
+    "avg_gt_after": 2.2531645569620253
+  },
+  "assignment": {
+    "total_samples": 79,
+    "successful_assignments": 79,
+    "failed_assignments": 0,
+    "success_rate": 100.0
+  }
+}
