@@ -95,8 +95,8 @@
     "avoid": ["Does it have a sad ending","Does someone sacrifice themselves","Does a parent die"]
   },
   {
-    "trait": "Horror fan (seeks scares & supernatural)",
-    "prefer": ["Are there ghosts","Is someone possessed","Are there clowns","Are there jumpscares","Is there blood/gore","Is there excessive gore"],
-    "avoid": []
+    "trait": "Horror avoider (avoids scares & supernatural)",
+    "prefer": [],
+    "avoid": ["Are there ghosts","Is someone possessed","Are there clowns","Are there jumpscares","Is there blood/gore","Is there excessive gore"]
   }
 ]
