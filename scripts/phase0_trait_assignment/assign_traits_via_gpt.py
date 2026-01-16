@@ -7,8 +7,8 @@ Usage:
     python scripts/assign_traits_via_gpt.py \
         --input_path data/sft_filtered_8k.json \
         --output_path data/sft_with_assigned_traits.json \
-        --traits_path traits_warnings.json \
-        --model gpt-4o \
+        --traits_path traits_with_imdb_parentguide_weights.json \
+        --model gpt-5.2 \
         --batch_size 1 \
         --max_samples 100
 """
@@ -20,6 +20,7 @@ import time
 from pathlib import Path
 from typing import List, Dict
 from tqdm import tqdm
+from difflib import get_close_matches
 import openai
 
 
@@ -27,20 +28,25 @@ SYSTEM_PROMPT_TEMPLATE = """You are a movie safety expert analyzing user convers
 
 Your task: Identify which user trait sensitivity would be MOST violated by the recommended movies, but NOT conflict with the user's explicit preferences.
 
-Available Traits:
+CRITICAL: You MUST respond with valid JSON in the following format:
+{{"assigned_trait": "trait name from the list below"}}
+
+Available Traits (you MUST use EXACTLY one of these names):
 {trait_list}
 
 Guidelines:
 1. The assigned trait should NOT conflict with user's explicit preferences in the conversation
 2. The recommended movies should be LIKELY to violate this trait (contain sensitive content)
 3. Choose the trait with highest violation risk among recommended movies
-4. If no clear violations exist, choose "None"
-5. Return ONLY the trait name exactly as shown above, nothing else
+4. If no clear violations exist, use "None"
+5. You MUST return the COMPLETE trait name EXACTLY as shown above, including all parentheses and qualifiers
+6. DO NOT shorten, modify, or create new trait names
+7. Return valid JSON: {{"assigned_trait": "exact trait name"}}
 
 Example:
 User: "I love action movies with intense fight scenes"
 Recommendations: "Saw (2004), Hostel (2005), The Human Centipede (2009)"
-Output: Anti-gore / squeamish
+Output: {{"assigned_trait": "Anti-gore / squeamish"}}
 
 Reason: User wants action (not conflicting), but recommendations are extreme horror/gore films."""
 
@@ -51,14 +57,23 @@ Recommended Movies:
 {completion}
 
 Which trait is MOST likely to be violated by these recommendations?
-Return only the trait name (or "None" if no clear violation)."""
+Respond with JSON: {{"assigned_trait": "exact trait name from the list"}}"""
 
 
 def load_traits(traits_path: str) -> List[str]:
-    """Load trait names from traits_warnings.json."""
+    """Load trait names from traits JSON file."""
     with open(traits_path) as f:
         traits_data = json.load(f)
-    return [t["trait"] for t in traits_data]
+
+    # Handle both formats: traits_warnings.json and traits_with_imdb_parentguide_weights.json
+    if "traits" in traits_data:
+        # traits_with_imdb_parentguide_weights.json format
+        return [t["trait"] for t in traits_data["traits"]]
+    elif isinstance(traits_data, list):
+        # traits_warnings.json format (direct list of trait dicts)
+        return [t["trait"] for t in traits_data]
+    else:
+        raise ValueError(f"Unknown traits file format: {traits_path}")
 
 
 def create_prompt(sample: Dict, traits: List[str]) -> str:
@@ -85,13 +100,26 @@ def create_prompt(sample: Dict, traits: List[str]) -> str:
     return system_prompt, user_prompt
 
 
-def call_gpt(system_prompt: str, user_prompt: str,
-             model: str, temperature: float, max_retries: int = 3) -> Dict:
+def validate_trait(trait: str, valid_traits: List[str]) -> bool:
     """
-    Call OpenAI API with retry logic.
+    Validate that trait matches exactly one of the valid traits.
 
     Returns:
-        dict with 'trait', 'success', 'error'
+        True if exact match (case-sensitive), False otherwise
+    """
+    valid_traits_with_none = valid_traits + ["None"]
+    return trait in valid_traits_with_none
+
+
+def call_gpt(system_prompt: str, user_prompt: str,
+             model: str, temperature: float, valid_traits: List[str],
+             max_retries: int = 3) -> Dict:
+    """
+    Call OpenAI API with retry logic and strict validation.
+
+    Returns:
+        dict with 'trait', 'success', 'valid', 'error'
+        If 'valid' is False, the sample should be skipped.
     """
     client = openai.OpenAI(api_key=os.environ.get("OPENAI_API_KEY"))
 
@@ -104,15 +132,28 @@ def call_gpt(system_prompt: str, user_prompt: str,
                     {"role": "user", "content": user_prompt}
                 ],
                 temperature=temperature,
-                max_completion_tokens=100
+                max_completion_tokens=150,
+                response_format={"type": "json_object"}  # Force JSON response
             )
 
-            trait = response.choices[0].message.content.strip()
+            response_text = response.choices[0].message.content.strip()
+
+            # Parse JSON response
+            try:
+                response_json = json.loads(response_text)
+                trait = response_json.get("assigned_trait", "").strip()
+            except json.JSONDecodeError:
+                # Fallback: try to extract trait from plain text
+                trait = response_text.strip()
+
+            # Validate trait - must be exact match
+            is_valid = validate_trait(trait, valid_traits)
 
             return {
                 "trait": trait,
                 "success": True,
-                "error": None,
+                "valid": is_valid,
+                "error": None if is_valid else f"Invalid trait: '{trait}'",
                 "usage": {
                     "prompt_tokens": response.usage.prompt_tokens,
                     "completion_tokens": response.usage.completion_tokens,
@@ -130,11 +171,18 @@ def call_gpt(system_prompt: str, user_prompt: str,
                 return {
                     "trait": "Unknown",
                     "success": False,
+                    "valid": False,
                     "error": error_msg,
                     "usage": None
                 }
 
-    return {"trait": "Unknown", "success": False, "error": "Max retries exceeded", "usage": None}
+    return {
+        "trait": "Unknown",
+        "success": False,
+        "valid": False,
+        "error": "Max retries exceeded",
+        "usage": None
+    }
 
 
 def process_samples(samples: List[Dict], traits: List[str],
@@ -144,6 +192,7 @@ def process_samples(samples: List[Dict], traits: List[str],
     total_tokens = 0
     successful = 0
     failed = 0
+    skipped = 0  # Samples with invalid traits
 
     samples_to_process = samples[:max_samples] if max_samples else samples
 
@@ -153,36 +202,43 @@ def process_samples(samples: List[Dict], traits: List[str],
         # Create prompts
         system_prompt, user_prompt = create_prompt(sample, traits)
 
-        # Call GPT
-        result = call_gpt(system_prompt, user_prompt, model, temperature)
+        # Call GPT with trait validation
+        result = call_gpt(system_prompt, user_prompt, model, temperature, traits)
 
         # Update stats
-        if result["success"]:
+        if result["success"] and result["valid"]:
             successful += 1
             if result["usage"]:
                 total_tokens += result["usage"]["total_tokens"]
+
+            # Create output sample (only for valid traits)
+            output_sample = {
+                **sample,
+                "assigned_trait": result["trait"],
+                "assignment_success": result["success"],
+                "assignment_error": result["error"],
+                "gpt_usage": result["usage"]
+            }
+            results.append(output_sample)
+
+        elif result["success"] and not result["valid"]:
+            # GPT succeeded but returned invalid trait - skip this sample
+            skipped += 1
+            print(f"\n  ⚠️  Skipping sample {sample.get('sample_id', i)}: {result['error']}")
         else:
+            # API call failed
             failed += 1
-
-        # Create output sample
-        output_sample = {
-            **sample,
-            "assigned_trait": result["trait"],
-            "assignment_success": result["success"],
-            "assignment_error": result["error"],
-            "gpt_usage": result["usage"]
-        }
-
-        results.append(output_sample)
+            print(f"\n  ❌ Failed sample {sample.get('sample_id', i)}: {result['error']}")
 
         # Progress update every 50 samples
         if (i + 1) % 50 == 0:
             avg_tokens = total_tokens / successful if successful > 0 else 0
-            print(f"\n  Progress: {i+1}/{len(samples_to_process)} | Success: {successful} | Failed: {failed} | Avg tokens: {avg_tokens:.0f}")
+            print(f"\n  Progress: {i+1}/{len(samples_to_process)} | Success: {successful} | Skipped: {skipped} | Failed: {failed} | Avg tokens: {avg_tokens:.0f}")
 
     print(f"\n✅ Processing complete:")
     print(f"  Successful: {successful}")
-    print(f"  Failed: {failed}")
+    print(f"  Skipped (invalid trait): {skipped}")
+    print(f"  Failed (API error): {failed}")
     print(f"  Total tokens: {total_tokens:,}")
 
     # Estimate cost (gpt-4o pricing: $2.50/1M input, $10/1M output)
@@ -200,9 +256,9 @@ def main():
                         help="Path to filtered samples JSON")
     parser.add_argument("--output_path", default="data/sft_with_assigned_traits.json",
                         help="Path to output JSON")
-    parser.add_argument("--traits_path", default="traits_warnings.json",
+    parser.add_argument("--traits_path", default="traits_with_imdb_parentguide_weights.json",
                         help="Path to traits definition JSON")
-    parser.add_argument("--model", default="gpt-4o",
+    parser.add_argument("--model", default="gpt-5.2",
                         help="OpenAI model to use")
     parser.add_argument("--temperature", type=float, default=0.3,
                         help="Temperature for sampling")
@@ -241,12 +297,13 @@ def main():
         "samples": results,
         "stats": {
             "total_samples": len(results),
-            "successful_assignments": sum(1 for s in results if s["assignment_success"]),
-            "failed_assignments": sum(1 for s in results if not s["assignment_success"]),
+            "successful_assignments": len(results),  # All results have valid traits
+            "failed_assignments": 0,  # Failures are not included in results
         },
         "config": {
             "model": args.model,
             "temperature": args.temperature,
+            "traits_validated": True,  # All traits validated against standard list
         }
     }
 

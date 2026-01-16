@@ -68,7 +68,7 @@ echo ""
 python3 scripts/phase0_trait_assignment/assign_traits_via_gpt.py \
     --input_path data/phase0_trait_assignment/sft_filtered_8k.json \
     --output_path "$OUTPUT_PATH" \
-    --traits_path traits_warnings.json \
+    --traits_path traits_with_imdb_parentguide_weights.json \
     --model gpt-5.2 \
     --temperature 0.3 \
     $MAX_SAMPLES

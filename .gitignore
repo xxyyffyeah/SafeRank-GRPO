@@ -1,3 +1,6 @@
 # .gitignore
 downloaded_datasets/
 .env
+data/
+logs/
+*.pyc
