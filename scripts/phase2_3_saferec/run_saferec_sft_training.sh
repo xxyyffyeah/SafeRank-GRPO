@@ -6,7 +6,7 @@ set -e  # Exit on error
 
 # Configuration
 DATASET_PATH="downloaded_datasets/processed_datasets/saferec_sft_dataset"
-MODEL_NAME="meta-llama/Llama-3.2-3B-Instruct"
+MODEL_NAME="Qwen/Qwen2.5-0.5B-Instruct"
 LOG_DIR="./logs"
 
 # Training hyperparameters (consistent with train_sft.py defaults)

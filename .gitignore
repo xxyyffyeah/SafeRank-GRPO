@@ -4,3 +4,4 @@ downloaded_datasets/
 data/
 logs/
 *.pyc
+results/

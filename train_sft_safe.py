@@ -7,7 +7,7 @@ from trl import SFTConfig, SFTTrainer
 
 sys.path.append("libs")
 from utils import process_rec_raw
-from metrics import evaluate_direct_match_truncate
+from metrics import evaluate_direct_match
 
 
 def parse_args():
