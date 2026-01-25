@@ -33,25 +33,25 @@ def extract_movies_from_saferec(saferec_json_path):
         # 1. Ground truth movies
         for movie, year in sample.get('groundtruth_with_release_year', []):
             if movie and year:
-                catalog.add((movie, str(year)))
+                catalog.add((movie, int(year)))
                 movie_sources['groundtruth'] += 1
 
         # 2. Original recommendations
         for rec in sample.get('original_recommendations', []):
             if 'title' in rec and 'year' in rec and rec['title'] and rec['year']:
-                catalog.add((rec['title'], str(rec['year'])))
+                catalog.add((rec['title'], int(rec['year'])))
                 movie_sources['original_recs'] += 1
 
         # 3. Safe recommendations (after filtering)
         for rec in sample.get('safe_recommendations', []):
             if 'title' in rec and 'year' in rec and rec['title'] and rec['year']:
-                catalog.add((rec['title'], str(rec['year'])))
+                catalog.add((rec['title'], int(rec['year'])))
                 movie_sources['safe_recs'] += 1
 
         # 4. Filtered recommendations
         for rec in sample.get('filtered_recommendations', []):
             if 'title' in rec and 'year' in rec and rec['title'] and rec['year']:
-                catalog.add((rec['title'], str(rec['year'])))
+                catalog.add((rec['title'], int(rec['year'])))
                 movie_sources['filtered_recs'] += 1
 
     return catalog, movie_sources

@@ -54,13 +54,18 @@ def remove_quotes(s):
 def process_rec_raw(item, raw_rec_field, rec_field):
     rec_list_raw = item[raw_rec_field]
     rec_list_raw = re.sub(r'\n+', '\n', rec_list_raw)
-    
+
+    # Extract only content from <solution> tag if present
+    solution_match = re.search(r'<solution>(.*?)</solution>', rec_list_raw, re.DOTALL)
+    if solution_match:
+        rec_list_raw = solution_match.group(1)
+
     # Split by newline and strip each line to remove leading/trailing whitespace
     lines = [line.strip() for line in rec_list_raw.strip().split('\n') if line.strip()]
-        
+
     try:
         pattern = r"(.+?)\s+\((\d{4})\)"
-        
+
         rec_list = []
         for line in lines:
             line = remove_quotes(del_format(del_space(line)))
@@ -71,7 +76,7 @@ def process_rec_raw(item, raw_rec_field, rec_field):
                 while new_movie_name != movie_name:
                     movie_name = new_movie_name
                     new_movie_name = remove_quotes(del_format(del_space(del_parentheses(movie_name.strip()))))
-                    
+
                 year = int(match.group(2))
                 rec_list.append((movie_name, year))
         item[rec_field] = rec_list

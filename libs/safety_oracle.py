@@ -40,13 +40,14 @@ class SafetyOracle:
 
     # Default risk threshold above which a movie is considered unsafe
     DEFAULT_RISK_THRESHOLD = 0.66
+    DEFAULT_YEAR_TOLERANCE = 2
 
     def __init__(
         self,
         trait_sensitivity_path: Union[str, Path],
         title_mapping_path: Union[str, Path],
         risk_threshold: float = DEFAULT_RISK_THRESHOLD,
-        year_tolerance: int = 1
+        year_tolerance: int = DEFAULT_YEAR_TOLERANCE
     ):
         """
         Initialize SafetyOracle.
@@ -54,8 +55,8 @@ class SafetyOracle:
         Args:
             trait_sensitivity_path: Path to movie_trait_sensitivity.json
             title_mapping_path: Path to title_to_imdb.pkl
-            risk_threshold: Risk score above which a movie is considered unsafe (default: 0.5)
-            year_tolerance: Year tolerance for fuzzy matching (default: 1)
+            risk_threshold: Risk score above which a movie is considered unsafe (default: 0.66)
+            year_tolerance: Year tolerance for fuzzy matching (default: 2, matches Recall evaluation)
         """
         self.risk_threshold = risk_threshold
         self.year_tolerance = year_tolerance
@@ -67,6 +68,10 @@ class SafetyOracle:
         # Load title mapping (title, year) -> imdbId
         self._title_mapping: Dict[Tuple[str, int], str] = {}
         self._load_title_mapping(title_mapping_path)
+
+        # Build title-only index for fast fallback lookup
+        self._title_index: Dict[str, List[str]] = {}
+        self._build_title_index()
 
         # Cache for normalized titles
         self._title_cache: Dict[str, str] = {}
@@ -98,6 +103,14 @@ class SafetyOracle:
             self._title_mapping = pickle.load(f)
 
         print(f"[SafetyOracle] Loaded title mapping for {len(self._title_mapping)} titles")
+
+    def _build_title_index(self) -> None:
+        """Build reverse index: normalized_title -> [imdb_ids] for fast fallback lookup."""
+        for (title, year), imdb_id in self._title_mapping.items():
+            if title not in self._title_index:
+                self._title_index[title] = []
+            self._title_index[title].append(imdb_id)
+        print(f"[SafetyOracle] Built title index for {len(self._title_index)} unique titles")
 
     @staticmethod
     def normalize_title(title: str) -> str:
@@ -149,11 +162,10 @@ class SafetyOracle:
                     if key in self._title_mapping:
                         return self._title_mapping[key]
 
-        # If no year provided or not found, try to find any match
-        # This is a fallback and may return wrong movie for common titles
-        for (t, y), imdb_id in self._title_mapping.items():
-            if t == normalized:
-                return imdb_id
+        # If no year provided or not found, use title index for fast fallback
+        # This is O(1) instead of O(n) iteration through entire mapping
+        if normalized in self._title_index:
+            return self._title_index[normalized][0]
 
         return None
 

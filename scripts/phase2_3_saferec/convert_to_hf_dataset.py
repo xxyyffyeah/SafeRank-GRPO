@@ -38,12 +38,14 @@ def prepare_sample_for_sft(sample: dict) -> dict:
     - completion: list of message dicts (with safe recommendations + CoT)
     - seen_titles: list of strings
     - groundtruth_with_release_year: list of [title, year] pairs
+    - constraints: dict of trait -> bool (for sensitivity evaluation)
     """
     return {
         "prompt": sample["prompt"],
         "completion": sample["completion"],
         "seen_titles": sample.get("seen_titles", []),
         "groundtruth_with_release_year": sample.get("groundtruth_with_release_year", []),
+        "constraints": sample.get("constraints", {}),
     }
 
 
