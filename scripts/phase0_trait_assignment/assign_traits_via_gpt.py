@@ -22,14 +22,17 @@ from typing import List, Dict
 from tqdm import tqdm
 from difflib import get_close_matches
 import openai
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from threading import Lock
 
 
-SYSTEM_PROMPT_TEMPLATE = """You are a movie safety expert analyzing user conversations and movie recommendations.
+# Prompt template for SFT data (with completion)
+SYSTEM_PROMPT_TEMPLATE_SFT = """You are a movie safety expert analyzing user conversations and movie recommendations.
 
 Your task: Identify which user trait sensitivity would be MOST violated by the recommended movies, but NOT conflict with the user's explicit preferences.
 
 CRITICAL: You MUST respond with valid JSON in the following format:
-{{"assigned_trait": "trait name from the list below"}}
+{{"assigned_trait": "trait name from the list below", "reason": "brief explanation"}}
 
 Available Traits (you MUST use EXACTLY one of these names):
 {trait_list}
@@ -41,23 +44,53 @@ Guidelines:
 4. If no clear violations exist, use "None"
 5. You MUST return the COMPLETE trait name EXACTLY as shown above, including all parentheses and qualifiers
 6. DO NOT shorten, modify, or create new trait names
-7. Return valid JSON: {{"assigned_trait": "exact trait name"}}
+7. Provide a brief reason (1-2 sentences) explaining why this trait was chosen
+8. Return valid JSON: {{"assigned_trait": "exact trait name", "reason": "explanation"}}
 
 Example:
 User: "I love action movies with intense fight scenes"
 Recommendations: "Saw (2004), Hostel (2005), The Human Centipede (2009)"
-Output: {{"assigned_trait": "Anti-gore / squeamish"}}
+Output: {{"assigned_trait": "Anti-gore / squeamish", "reason": "User wants action (not conflicting), but recommendations are extreme horror/gore films that feature graphic torture and body horror."}}"""
 
-Reason: User wants action (not conflicting), but recommendations are extreme horror/gore films."""
-
-USER_PROMPT_TEMPLATE = """User Conversation:
+USER_PROMPT_TEMPLATE_SFT = """User Conversation:
 {prompt}
 
 Recommended Movies:
 {completion}
 
 Which trait is MOST likely to be violated by these recommendations?
-Respond with JSON: {{"assigned_trait": "exact trait name from the list"}}"""
+Respond with JSON: {{"assigned_trait": "exact trait name from the list", "reason": "brief explanation"}}"""
+
+# Prompt template for GRPO data (without completion, infer from conversation only)
+SYSTEM_PROMPT_TEMPLATE_GRPO = """You are a movie safety expert analyzing user conversations about movies.
+
+Your task: Identify which user trait sensitivity is MOST likely based ONLY on the user's conversation tone, language, and explicit mentions.
+
+CRITICAL: You MUST respond with valid JSON in the following format:
+{{"assigned_trait": "trait name from the list below", "reason": "brief explanation"}}
+
+Available Traits (you MUST use EXACTLY one of these names):
+{trait_list}
+
+Guidelines:
+1. Use explicit clues from the conversation (mentions of kids, family, avoiding violence, etc.)
+2. If user mentions "kids", "children", "family-friendly" → use "Parent filtering for children"
+3. If user mentions avoiding specific content (gore, violence, scary, etc.) → use corresponding trait
+4. If no explicit sensitivity is mentioned, choose the MOST LIKELY trait based on conversation context
+5. DO NOT infer traits from movie titles or genres mentioned
+6. You MUST return the COMPLETE trait name EXACTLY as shown above, including all parentheses and qualifiers
+7. Provide a brief reason (1-2 sentences) explaining why this trait was chosen
+8. Return valid JSON: {{"assigned_trait": "exact trait name", "reason": "explanation"}}
+
+Example:
+User: "I'm looking for action thrillers, but please nothing with gore or graphic violence - I'm very squeamish about that stuff"
+Output: {{"assigned_trait": "Anti-gore / squeamish", "reason": "User explicitly states being squeamish about gore and graphic violence, indicating this sensitivity needs to be filtered."}}"""
+
+USER_PROMPT_TEMPLATE_GRPO = """User Conversation:
+{prompt}
+
+Based ONLY on the user's conversation, which trait sensitivity is most clearly indicated?
+Respond with JSON: {{"assigned_trait": "exact trait name from the list", "reason": "brief explanation"}}"""
 
 
 def load_traits(traits_path: str) -> List[str]:
@@ -77,25 +110,36 @@ def load_traits(traits_path: str) -> List[str]:
 
 
 def create_prompt(sample: Dict, traits: List[str]) -> str:
-    """Create user prompt for GPT."""
+    """Create user prompt for GPT.
+
+    Handles two cases:
+    - SFT data: has completion field, use recommendations for trait assignment
+    - GRPO data: no completion, use conversation only (MUST assign a trait, no None option)
+    """
     # Extract prompt content
     prompt_content = sample["prompt"][0]["content"]
 
-    # Extract completion content
-    completion_content = sample["completion"][0]["content"]
+    # Check if sample has completion (SFT) or not (GRPO)
+    has_completion = "completion" in sample and sample["completion"]
 
     # Format trait list
     trait_list = "\n".join([f"- {trait}" for trait in traits])
-    trait_list += "\n- None"
 
-    # Create system prompt
-    system_prompt = SYSTEM_PROMPT_TEMPLATE.format(trait_list=trait_list)
-
-    # Create user prompt
-    user_prompt = USER_PROMPT_TEMPLATE.format(
-        prompt=prompt_content,
-        completion=completion_content
-    )
+    if has_completion:
+        # SFT data: use completion (recommended movies), allow None
+        trait_list += "\n- None"
+        completion_content = sample["completion"][0]["content"]
+        system_prompt = SYSTEM_PROMPT_TEMPLATE_SFT.format(trait_list=trait_list)
+        user_prompt = USER_PROMPT_TEMPLATE_SFT.format(
+            prompt=prompt_content,
+            completion=completion_content
+        )
+    else:
+        # GRPO data: infer from conversation only, NO None option
+        system_prompt = SYSTEM_PROMPT_TEMPLATE_GRPO.format(trait_list=trait_list)
+        user_prompt = USER_PROMPT_TEMPLATE_GRPO.format(
+            prompt=prompt_content
+        )
 
     return system_prompt, user_prompt
 
@@ -142,15 +186,18 @@ def call_gpt(system_prompt: str, user_prompt: str,
             try:
                 response_json = json.loads(response_text)
                 trait = response_json.get("assigned_trait", "").strip()
+                reason = response_json.get("reason", "").strip()
             except json.JSONDecodeError:
                 # Fallback: try to extract trait from plain text
                 trait = response_text.strip()
+                reason = ""
 
             # Validate trait - must be exact match
             is_valid = validate_trait(trait, valid_traits)
 
             return {
                 "trait": trait,
+                "reason": reason,
                 "success": True,
                 "valid": is_valid,
                 "error": None if is_valid else f"Invalid trait: '{trait}'",
@@ -170,6 +217,7 @@ def call_gpt(system_prompt: str, user_prompt: str,
             else:
                 return {
                     "trait": "Unknown",
+                    "reason": "",
                     "success": False,
                     "valid": False,
                     "error": error_msg,
@@ -178,6 +226,7 @@ def call_gpt(system_prompt: str, user_prompt: str,
 
     return {
         "trait": "Unknown",
+        "reason": "",
         "success": False,
         "valid": False,
         "error": "Max retries exceeded",
@@ -185,55 +234,94 @@ def call_gpt(system_prompt: str, user_prompt: str,
     }
 
 
+def process_single_sample(sample: Dict, traits: List[str], model: str, temperature: float) -> Dict:
+    """Process a single sample and return result with status."""
+    # Create prompts
+    system_prompt, user_prompt = create_prompt(sample, traits)
+
+    # Call GPT with trait validation
+    result = call_gpt(system_prompt, user_prompt, model, temperature, traits)
+
+    # Return sample with result
+    return {
+        "sample": sample,
+        "result": result
+    }
+
+
 def process_samples(samples: List[Dict], traits: List[str],
                    model: str, temperature: float,
-                   max_samples: int = None) -> List[Dict]:
-    """Process samples and assign traits."""
+                   max_samples: int = None, num_workers: int = 10) -> List[Dict]:
+    """Process samples and assign traits using parallel workers."""
+    samples_to_process = samples[:max_samples] if max_samples else samples
+
+    # Thread-safe counters and results
+    results = []
+    results_lock = Lock()
     total_tokens = 0
     successful = 0
     failed = 0
-    skipped = 0  # Samples with invalid traits
+    skipped = 0
 
-    samples_to_process = samples[:max_samples] if max_samples else samples
+    print(f"Processing {len(samples_to_process):,} samples with {num_workers} parallel workers...")
 
-    results = []
+    # Process samples in parallel
+    with ThreadPoolExecutor(max_workers=num_workers) as executor:
+        # Submit all tasks
+        future_to_sample = {
+            executor.submit(process_single_sample, sample, traits, model, temperature): sample
+            for sample in samples_to_process
+        }
 
-    for i, sample in enumerate(tqdm(samples_to_process, desc="Assigning traits")):
-        # Create prompts
-        system_prompt, user_prompt = create_prompt(sample, traits)
+        # Process completed tasks with progress bar
+        with tqdm(total=len(samples_to_process), desc="Assigning traits") as pbar:
+            for future in as_completed(future_to_sample):
+                sample_result = future.result()
+                sample = sample_result["sample"]
+                result = sample_result["result"]
 
-        # Call GPT with trait validation
-        result = call_gpt(system_prompt, user_prompt, model, temperature, traits)
+                # Thread-safe update of results and stats
+                with results_lock:
+                    if result["success"] and result["valid"]:
+                        # Filter out "None" traits - we only want specific traits
+                        if result["trait"] == "None":
+                            skipped += 1
+                            tqdm.write(f"⚠️  Skipping sample {sample.get('sample_id', 'unknown')}: trait is 'None'")
+                        else:
+                            successful += 1
+                            if result["usage"]:
+                                total_tokens += result["usage"]["total_tokens"]
 
-        # Update stats
-        if result["success"] and result["valid"]:
-            successful += 1
-            if result["usage"]:
-                total_tokens += result["usage"]["total_tokens"]
+                            # Create output sample (only for valid traits)
+                            output_sample = {
+                                **sample,
+                                "assigned_trait": result["trait"],
+                                "assignment_reason": result["reason"],
+                                "assignment_success": result["success"],
+                                "assignment_error": result["error"],
+                                "gpt_usage": result["usage"]
+                            }
+                            results.append(output_sample)
 
-            # Create output sample (only for valid traits)
-            output_sample = {
-                **sample,
-                "assigned_trait": result["trait"],
-                "assignment_success": result["success"],
-                "assignment_error": result["error"],
-                "gpt_usage": result["usage"]
-            }
-            results.append(output_sample)
+                    elif result["success"] and not result["valid"]:
+                        # GPT succeeded but returned invalid trait - skip this sample
+                        skipped += 1
+                        tqdm.write(f"⚠️  Skipping sample {sample.get('sample_id', 'unknown')}: {result['error']}")
+                    else:
+                        # API call failed
+                        failed += 1
+                        tqdm.write(f"❌ Failed sample {sample.get('sample_id', 'unknown')}: {result['error']}")
 
-        elif result["success"] and not result["valid"]:
-            # GPT succeeded but returned invalid trait - skip this sample
-            skipped += 1
-            print(f"\n  ⚠️  Skipping sample {sample.get('sample_id', i)}: {result['error']}")
-        else:
-            # API call failed
-            failed += 1
-            print(f"\n  ❌ Failed sample {sample.get('sample_id', i)}: {result['error']}")
+                    # Update progress bar description with stats
+                    avg_tokens = total_tokens / successful if successful > 0 else 0
+                    pbar.set_postfix({
+                        'Success': successful,
+                        'Skipped': skipped,
+                        'Failed': failed,
+                        'Avg tokens': f'{avg_tokens:.0f}'
+                    })
 
-        # Progress update every 50 samples
-        if (i + 1) % 50 == 0:
-            avg_tokens = total_tokens / successful if successful > 0 else 0
-            print(f"\n  Progress: {i+1}/{len(samples_to_process)} | Success: {successful} | Skipped: {skipped} | Failed: {failed} | Avg tokens: {avg_tokens:.0f}")
+                pbar.update(1)
 
     print(f"\n✅ Processing complete:")
     print(f"  Successful: {successful}")
@@ -266,6 +354,8 @@ def main():
                         help="Batch size (currently only 1 supported)")
     parser.add_argument("--max_samples", type=int, default=None,
                         help="Max samples to process (for testing)")
+    parser.add_argument("--num_workers", type=int, default=10,
+                        help="Number of parallel workers (default: 10)")
     args = parser.parse_args()
 
     # Check API key
@@ -289,7 +379,7 @@ def main():
         print(f"⚠️ Processing only {args.max_samples} samples (test mode)")
 
     results = process_samples(
-        samples, traits, args.model, args.temperature, args.max_samples
+        samples, traits, args.model, args.temperature, args.max_samples, args.num_workers
     )
 
     # Save

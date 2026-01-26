@@ -17,14 +17,15 @@ from datasets import load_from_disk
 from tqdm import tqdm
 
 
-def filter_samples(dataset, min_groundtruth: int, target_samples: int):
+def filter_samples(dataset, min_groundtruth: int, target_samples: int, split_name: str = "train"):
     """
     Filter samples with sufficient groundtruth.
 
     Args:
         dataset: HuggingFace dataset
-        min_groundtruth: Minimum number of GT movies required
+        min_groundtruth: Minimum number of GT movies required (0 = no filter)
         target_samples: Target number of samples to extract
+        split_name: Name prefix for sample_id (train/test/validation/grpo)
 
     Returns:
         List of filtered samples
@@ -32,7 +33,10 @@ def filter_samples(dataset, min_groundtruth: int, target_samples: int):
     filtered = []
     gt_distribution = {}
 
-    print(f"Filtering samples with GT >= {min_groundtruth}...")
+    if min_groundtruth > 0:
+        print(f"Filtering samples with GT >= {min_groundtruth}...")
+    else:
+        print(f"Extracting samples (no GT filter)...")
 
     for i, sample in enumerate(tqdm(dataset, desc="Scanning")):
         num_gt = len(sample["groundtruth_with_release_year"])
@@ -40,23 +44,25 @@ def filter_samples(dataset, min_groundtruth: int, target_samples: int):
         # Track distribution
         gt_distribution[num_gt] = gt_distribution.get(num_gt, 0) + 1
 
-        # Filter by min_groundtruth
-        if num_gt >= min_groundtruth:
+        # Filter by min_groundtruth (0 = no filter)
+        if min_groundtruth == 0 or num_gt >= min_groundtruth:
             filtered_sample = {
-                "sample_id": f"train_{i}",
+                "sample_id": f"{split_name}_{i}",
                 "prompt": sample["prompt"],
-                "completion": sample["completion"],
                 "seen_titles": sample["seen_titles"],
                 "groundtruth_with_release_year": sample["groundtruth_with_release_year"],
                 "num_groundtruth": num_gt
             }
+            # completion is optional (GRPO data doesn't have it)
+            if "completion" in sample:
+                filtered_sample["completion"] = sample["completion"]
             filtered.append(filtered_sample)
 
             # Stop if we have enough
             if len(filtered) >= target_samples:
                 break
 
-    print(f"\n✅ Filtered {len(filtered):,} samples")
+    print(f"\n✅ Extracted {len(filtered):,} samples")
     print(f"\n📊 GT Distribution (in scanned samples):")
     for num_gt in sorted(gt_distribution.keys())[:15]:
         print(f"  {num_gt} GT: {gt_distribution[num_gt]:,} samples")
@@ -73,9 +79,11 @@ def main():
                         default="data/sft_filtered_8k.json",
                         help="Path to output JSON file")
     parser.add_argument("--min_groundtruth", type=int, default=3,
-                        help="Minimum number of groundtruth movies")
+                        help="Minimum number of groundtruth movies (0 = no filter)")
     parser.add_argument("--target_samples", type=int, default=8000,
                         help="Target number of samples to extract")
+    parser.add_argument("--split_name", type=str, default="train",
+                        help="Split name for sample_id prefix (train/test/validation/grpo)")
     args = parser.parse_args()
 
     # Load dataset
@@ -85,7 +93,7 @@ def main():
 
     # Filter
     filtered_samples, gt_dist = filter_samples(
-        dataset, args.min_groundtruth, args.target_samples
+        dataset, args.min_groundtruth, args.target_samples, args.split_name
     )
 
     # Calculate stats

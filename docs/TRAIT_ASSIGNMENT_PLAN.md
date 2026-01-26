@@ -41,19 +41,76 @@ SafeRec Training Dataset
 
 ### 筛选标准
 
-| 标准 | 阈值 | 原因 |
-|------|------|------|
-| **Groundtruth 数量** | ≥ 3 | 有足够的 GT 电影供过滤 |
-| **目标样本数** | 8,000 | 平衡数据量和 API 成本 |
+| 数据集 | GT 阈值 | 目标样本数 | 原因 |
+|--------|---------|------------|------|
+| **SFT Train** | ≥ 2 | 24,000 | 有足够的 GT 电影供过滤（Step 3 会移除违规 GT） |
+| **SFT Test** | ≥ 0 | 1,000 | 测试集不过滤 GT，保持原始分布 |
+| **SFT Validation** | ≥ 0 | 1,000 | 验证集不过滤 GT，保持原始分布 |
+| **GRPO** | ≥ 0 | 72,000 | GRPO 用于 RL 训练，不需要 GT 过滤 |
 
-### 实现脚本
+### 为什么 Train 使用 GT ≥ 2？
+
+Step 3（GT 违规过滤）会移除违反 assigned trait 的 GT 电影。如果初始 GT < 2：
+- 过滤后可能剩余 0 个 GT
+- 样本会被丢弃（min_groundtruth_after_filter = 1）
+- 导致大量样本损失
+
+因此，Train 集使用 GT ≥ 2 确保过滤后仍有足够 GT。
+
+### SFT 数据筛选
 
 ```bash
-python scripts/filter_sft_samples.py \
+# Train: 24k samples, GT >= 2
+python scripts/phase0_trait_assignment/filter_sft_samples.py \
     --input_path downloaded_datasets/processed_datasets/sft_dataset/train \
-    --output_path data/sft_filtered_8k.json \
-    --min_groundtruth 3 \
-    --target_samples 8000
+    --output_path data/phase0_trait_assignment/expanded/sft_train_24k_filtered.json \
+    --min_groundtruth 2 \
+    --target_samples 24000 \
+    --split_name train
+
+# Test: 1k samples, no GT filter
+python scripts/phase0_trait_assignment/filter_sft_samples.py \
+    --input_path downloaded_datasets/processed_datasets/sft_dataset/test \
+    --output_path data/phase0_trait_assignment/expanded/sft_test_1k_filtered.json \
+    --min_groundtruth 0 \
+    --target_samples 1000 \
+    --split_name test
+
+# Validation: 1k samples, no GT filter
+python scripts/phase0_trait_assignment/filter_sft_samples.py \
+    --input_path downloaded_datasets/processed_datasets/sft_dataset/validation \
+    --output_path data/phase0_trait_assignment/expanded/sft_val_1k_filtered.json \
+    --min_groundtruth 0 \
+    --target_samples 1000 \
+    --split_name validation
+```
+
+### GRPO 数据筛选
+
+GRPO 数据集与 SFT 数据集有以下区别：
+
+| 字段 | SFT 数据 | GRPO 数据 |
+|------|----------|-----------|
+| prompt | ✅ | ✅ |
+| completion | ✅ | ❌ 无此字段 |
+| seen_titles | ✅ | ✅ |
+| groundtruth_with_release_year | ✅ | ✅ |
+
+**GRPO 无 completion 的处理方式**：
+- Step 2 (assign_traits_via_gpt.py) **只使用用户对话**推断 trait
+- **不使用 groundtruth**（因为 groundtruth 是用户喜欢的电影，无法推断用户避免什么）
+- GPT 只从对话中的显式线索（如 "for kids", "avoid gore" 等）推断 trait
+- 如果对话中没有明确的敏感性指示，分配 "None"
+- 使用专门的 `SYSTEM_PROMPT_TEMPLATE_GRPO` 和 `USER_PROMPT_TEMPLATE_GRPO`
+
+```bash
+# GRPO: 72k samples, no GT filter
+python scripts/phase0_trait_assignment/filter_sft_samples.py \
+    --input_path downloaded_datasets/processed_datasets/grpo/grpo_dataset/train \
+    --output_path data/phase0_trait_assignment/expanded/grpo_72k_filtered.json \
+    --min_groundtruth 0 \
+    --target_samples 72000 \
+    --split_name grpo
 ```
 
 ### 预期输出
@@ -89,41 +146,98 @@ python scripts/filter_sft_samples.py \
 
 | 参数 | 值 |
 |------|-----|
-| **Model** | `gpt-4o` (或 `gpt-4o-2024-11-20`) |
+| **Model** | `gpt-5.2` |
 | **Temperature** | 0.3 (低温度保证一致性) |
-| **Max Tokens** | 500 |
-| **Batch Size** | 20 samples/request |
+| **Max Tokens** | 150 |
+| **Response Format** | JSON Object |
 
-### Prompt 设计
+### 双 Prompt 模式
+
+由于 GRPO 数据没有 `completion` 字段，使用两套 Prompt：
+
+#### SFT Prompt（有 completion）
 
 ```python
-SYSTEM_PROMPT = """You are a movie safety expert analyzing user conversations and movie recommendations.
+SYSTEM_PROMPT_TEMPLATE_SFT = """You are a movie safety expert analyzing user conversations and movie recommendations.
 
-Your task: Identify which user trait sensitivity would be MOST violated by the recommended movies.
+Your task: Identify which user trait sensitivity would be MOST violated by the recommended movies, but NOT conflict with the user's explicit preferences.
 
 Available Traits:
 {trait_list}
 
 Guidelines:
-1. The assigned trait should NOT conflict with user's explicit preferences in the conversation
-2. The recommended movies should be LIKELY to violate this trait (contain sensitive content)
-3. Choose the trait with highest violation risk among recommended movies
-4. Return ONLY the trait name, nothing else
-
-Example:
-User: "I love action movies with intense fight scenes"
-Recommendations: "Saw (2004), Hostel (2005), The Human Centipede (2009)"
-Output: Anti-gore / squeamish
+1. The assigned trait should NOT conflict with user's explicit preferences
+2. The recommended movies should be LIKELY to violate this trait
+3. Choose the trait with highest violation risk
+4. Return valid JSON: {"assigned_trait": "exact trait name"}
 """
 
-USER_PROMPT_TEMPLATE = """Conversation:
+USER_PROMPT_TEMPLATE_SFT = """User Conversation:
 {prompt}
 
 Recommended Movies:
 {completion}
 
 Which trait is MOST likely to be violated by these recommendations?
-Return only the trait name."""
+Respond with JSON: {"assigned_trait": "exact trait name from the list"}"""
+```
+
+#### GRPO Prompt（无 completion，仅基于对话）
+
+```python
+SYSTEM_PROMPT_TEMPLATE_GRPO = """You are a movie safety expert analyzing user conversations about movies.
+
+Your task: Identify which user trait sensitivity is MOST likely based ONLY on the user's conversation tone, language, and explicit mentions. Do NOT infer from movie titles or preferences.
+
+Available Traits:
+{trait_list}
+
+Guidelines:
+1. ONLY use explicit clues from the conversation (mentions of kids, family, avoiding violence, etc.)
+2. If user mentions "kids", "children", "family-friendly" → use "Parent filtering for children"
+3. If user mentions avoiding specific content (gore, violence, scary, etc.) → use corresponding trait
+4. If NO explicit sensitivity mentioned → use "None"
+5. DO NOT infer traits from movie titles or genres mentioned
+6. Return valid JSON: {"assigned_trait": "exact trait name", "reason": "explanation"}
+
+Example:
+User: "I'm looking for action thrillers, but please nothing with gore or graphic violence - I'm very squeamish about that stuff"
+Output: {"assigned_trait": "Anti-gore / squeamish", "reason": "User explicitly states being squeamish about gore and graphic violence, indicating this sensitivity needs to be filtered."}
+"""
+
+USER_PROMPT_TEMPLATE_GRPO = """User Conversation:
+{prompt}
+
+Based ONLY on the user's conversation (ignore any movie titles), which trait sensitivity is most clearly indicated?
+Respond with JSON: {"assigned_trait": "exact trait name from the list", "reason": "brief explanation"}"""
+```
+
+**关键差异**：
+- **SFT**: 从推荐电影（completion）推断可能违反的 trait
+- **GRPO**: 从用户对话中的**显式线索**推断敏感性，不使用 groundtruth
+
+### 自动检测数据类型
+
+```python
+def create_prompt(sample, traits):
+    # 自动检测是否有 completion
+    has_completion = "completion" in sample and sample["completion"]
+
+    if has_completion:
+        # SFT 数据：使用 completion（推荐电影）
+        system_prompt = SYSTEM_PROMPT_TEMPLATE_SFT.format(...)
+        user_prompt = USER_PROMPT_TEMPLATE_SFT.format(
+            prompt=prompt_content,
+            completion=completion_content
+        )
+    else:
+        # GRPO 数据：只使用对话，忽略 groundtruth
+        system_prompt = SYSTEM_PROMPT_TEMPLATE_GRPO.format(...)
+        user_prompt = USER_PROMPT_TEMPLATE_GRPO.format(
+            prompt=prompt_content
+        )
+
+    return system_prompt, user_prompt
 ```
 
 ### 实现脚本
@@ -145,13 +259,25 @@ python scripts/assign_traits_via_gpt.py \
 {
   "sample_id": "train_12345",
   "assigned_trait": "Anti-gore / squeamish",
-  "assignment_confidence": "high",
-  "gpt_reasoning": "Recommendations include multiple horror films with graphic violence",
+  "assignment_reason": "User wants action (not conflicting), but recommendations are extreme horror/gore films that feature graphic torture and body horror.",
+  "assignment_success": true,
+  "assignment_error": null,
+  "gpt_usage": {
+    "prompt_tokens": 726,
+    "completion_tokens": 35,
+    "total_tokens": 761
+  },
   "prompt": [...],
   "completion": [...],
   "groundtruth_with_release_year": [...]
 }
 ```
+
+**新增字段说明**：
+- `assignment_reason`: GPT 给出的 trait 选择理由（1-2句解释）
+- `assignment_success`: 是否成功分配 trait
+- `assignment_error`: 错误信息（如果有）
+- `gpt_usage`: Token 使用统计
 
 ---
 
@@ -289,23 +415,46 @@ python scripts/analyze_trait_distribution.py \
 
 ```
 Rank-GRPO/
-├── scripts/
-│   ├── filter_sft_samples.py              # [新增] Step 1 筛选
-│   ├── assign_traits_via_gpt.py           # [新增] Step 2 GPT 标注
-│   ├── filter_violating_groundtruth.py    # [新增] Step 3 过滤
-│   └── analyze_trait_distribution.py      # [新增] Step 4 统计
+├── scripts/phase0_trait_assignment/
+│   ├── filter_sft_samples.py              # Step 1 筛选（支持 SFT 和 GRPO）
+│   ├── assign_traits_via_gpt.py           # Step 2 GPT 标注（双 Prompt 模式）
+│   ├── filter_violating_groundtruth.py    # Step 3 过滤
+│   ├── analyze_trait_distribution.py      # Step 4 统计
+│   ├── run_trait_assignment_pipeline.sh   # 单数据集 Pipeline
+│   └── expand_saferec_pipeline.sh         # 扩展 Pipeline（4个数据集）
 │
-├── data/
-│   ├── sft_filtered_8k.json               # Step 1 输出
-│   ├── sft_with_assigned_traits.json      # Step 2 输出
-│   ├── saferec_sft_8k_dataset.json        # Step 3 输出（最终数据）
-│   └── trait_stats/                       # Step 4 输出
-│       ├── trait_distribution.png
-│       └── stats.json
+├── data/phase0_trait_assignment/
+│   ├── expanded/                          # 扩展数据集输出目录
+│   │   ├── sft_train_24k_filtered.json    # Train 24k 筛选结果
+│   │   ├── sft_train_24k_with_traits.json # Train 24k 标注结果
+│   │   ├── sft_train_24k_final.json       # Train 24k 最终结果
+│   │   ├── sft_train_24k_stats/           # Train 24k 统计
+│   │   ├── sft_test_1k_*.json             # Test 1k 各阶段输出
+│   │   ├── sft_val_1k_*.json              # Validation 1k 各阶段输出
+│   │   └── grpo_72k_*.json                # GRPO 72k 各阶段输出
+│   └── trait_stats/                       # 原 8k 统计（已完成）
+│
+├── .env                                   # OpenAI API Key
 │
 └── docs/
     └── TRAIT_ASSIGNMENT_PLAN.md           # 本文档
 ```
+
+### 运行扩展 Pipeline
+
+```bash
+# 运行完整 4 数据集 Pipeline
+bash scripts/phase0_trait_assignment/expand_saferec_pipeline.sh
+
+# 测试模式（每个数据集只处理 50 条）
+bash scripts/phase0_trait_assignment/expand_saferec_pipeline.sh --test
+```
+
+扩展 Pipeline 会依次处理：
+1. **sft_train_24k**: 24,000 条，GT ≥ 2
+2. **sft_test_1k**: 1,000 条，无 GT 过滤
+3. **sft_val_1k**: 1,000 条，无 GT 过滤
+4. **grpo_72k**: 72,000 条，无 GT 过滤，使用 GRPO Prompt
 
 ---
 
@@ -414,6 +563,82 @@ Arrival (2016)
 如果 GPT 成本过高，可使用：
 - **规则 + 启发式**: 基于电影 trait data 自动推断
 - **Smaller LLM**: 使用 Llama-3.1-70B 或 Qwen-72B
+
+---
+
+## Phase 2 & 3: SafeRec Dataset with Dual Reasoning
+
+### 数据集字段
+
+生成的 HuggingFace 数据集包含以下 7 个字段：
+
+```python
+{
+    # 输入输出
+    "prompt": [{"role": "user", "content": "..."}],
+    "completion": [{"role": "assistant", "content": "..."}],
+
+    # 元数据
+    "seen_titles": ["Movie 1", "Movie 2", ...],
+    "groundtruth_with_release_year": [["Movie A", "2020"], ...],
+    "constraints": {"Trait 1": True, "Trait 2": None, ...},  # 20 个 traits
+
+    # 新增：Trait Assignment Reasoning
+    "assigned_trait": "Horror avoider (avoids scares & supernatural)",
+    "assignment_reason": "User mentioned 'I don't watch horror movies' in conversation."
+}
+```
+
+### 两层 Reasoning
+
+**1. Trait Assignment Reasoning** (`assigned_trait` + `assignment_reason`)
+- **作用**: 解释为什么 GPT 分配了这个 trait
+- **来源**: Phase 0 - Trait Assignment
+- **示例**:
+  ```
+  assigned_trait: "Horror avoider (avoids scares & supernatural)"
+  assignment_reason: "User mentioned 'I don't watch horror movies' in conversation."
+  ```
+
+**2. Safety Filtering Reasoning** (在 `completion` 中的 `<reasoning>` 标签)
+- **作用**: 解释哪些电影被过滤以及为什么
+- **来源**: Phase 2&3 - SafeRec Dataset Generation
+- **示例**:
+  ```xml
+  <reasoning>
+  Safety Analysis:
+  User preferences to avoid: Horror avoider (avoids scares & supernatural)
+
+  Movies filtered due to safety concerns:
+  - Drop Dead Gorgeous (1999): Horror avoider: risk=1.00
+  - Man Bites Dog (1992): Horror avoider: risk=1.00
+
+  Safe recommendations selected: 14 movies
+  </reasoning>
+  ```
+
+### 数据统计
+
+| Split | Samples | With Trait Reasoning | With Safety CoT |
+|-------|---------|---------------------|-----------------|
+| Train | 19,086 | 100% | 99.6% |
+| Test | 1,212 | 100% | 99.6% |
+| Validation | 1,127 | 100% | 99.5% |
+
+### 使用示例
+
+```python
+from datasets import load_from_disk
+
+# 加载数据集
+dataset = load_from_disk('downloaded_datasets/processed_datasets/saferec_sft_dataset/train')
+
+# 访问双层 reasoning
+sample = dataset[0]
+print(f"Assigned Trait: {sample['assigned_trait']}")
+print(f"Why: {sample['assignment_reason']}")
+print(f"Safety CoT: {sample['completion'][0]['content']}")
+```
 
 ---
 

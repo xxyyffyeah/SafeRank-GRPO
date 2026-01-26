@@ -1,19 +1,18 @@
 #!/usr/bin/env python3
 """
-Convert SafeRec JSON dataset to HuggingFace Dataset format for SFT training.
+Convert SafeRec JSON dataset to HuggingFace Dataset format.
 
 Usage:
     python scripts/phase2_3_saferec/convert_to_hf_dataset.py \
-        --input_path data/phase2_3_saferec/saferec_sft_final.json \
-        --output_path downloaded_datasets/processed_datasets/saferec_sft_dataset \
-        --train_ratio 0.9
+        --input_path data/phase0_trait_assignment/expanded/sft_test_1k_final.json \
+        --output_path downloaded_datasets/processed_datasets/saferec_sft_dataset/test \
+        --split_name test
 """
 
 import argparse
 import json
 from pathlib import Path
 from datasets import Dataset
-import random
 
 
 def load_saferec_data(input_path: str) -> list:
@@ -39,6 +38,8 @@ def prepare_sample_for_sft(sample: dict) -> dict:
     - seen_titles: list of strings
     - groundtruth_with_release_year: list of [title, year] pairs
     - constraints: dict of trait -> bool (for sensitivity evaluation)
+    - assigned_trait: str, the assigned user sensitivity trait
+    - assignment_reason: str, the reasoning for why this trait was assigned
     """
     return {
         "prompt": sample["prompt"],
@@ -46,23 +47,9 @@ def prepare_sample_for_sft(sample: dict) -> dict:
         "seen_titles": sample.get("seen_titles", []),
         "groundtruth_with_release_year": sample.get("groundtruth_with_release_year", []),
         "constraints": sample.get("constraints", {}),
+        "assigned_trait": sample.get("assigned_trait", ""),
+        "assignment_reason": sample.get("assignment_reason", ""),
     }
-
-
-def split_data(samples: list, train_ratio: float = 0.9, seed: int = 42):
-    """Split data into train/validation sets."""
-    random.seed(seed)
-
-    # Shuffle
-    shuffled = samples.copy()
-    random.shuffle(shuffled)
-
-    # Split
-    split_idx = int(len(shuffled) * train_ratio)
-    train_samples = shuffled[:split_idx]
-    val_samples = shuffled[split_idx:]
-
-    return train_samples, val_samples
 
 
 def main():
@@ -71,26 +58,20 @@ def main():
     parser.add_argument(
         "--input_path",
         type=str,
-        default="data/phase2_3_saferec/saferec_sft_final.json",
+        required=True,
         help="Path to SafeRec JSON file"
     )
     parser.add_argument(
         "--output_path",
         type=str,
-        default="downloaded_datasets/processed_datasets/saferec_sft_dataset",
+        required=True,
         help="Output directory for HuggingFace dataset"
     )
     parser.add_argument(
-        "--train_ratio",
-        type=float,
-        default=0.9,
-        help="Train/validation split ratio"
-    )
-    parser.add_argument(
-        "--seed",
-        type=int,
-        default=42,
-        help="Random seed"
+        "--split_name",
+        type=str,
+        default="test",
+        help="Name of the split (e.g., train, test, validation)"
     )
 
     args = parser.parse_args()
@@ -100,36 +81,28 @@ def main():
     print(f"Loaded {len(samples)} samples", flush=True)
 
     # Prepare samples for SFT
-    print("Preparing samples for SFT training...", flush=True)
+    print("Preparing samples for SFT...", flush=True)
     sft_samples = [prepare_sample_for_sft(s) for s in samples]
 
-    # Split into train/val
-    print(f"Splitting data (train_ratio={args.train_ratio})...", flush=True)
-    train_samples, val_samples = split_data(sft_samples, args.train_ratio, args.seed)
-    print(f"Train: {len(train_samples)}, Validation: {len(val_samples)}", flush=True)
-
-    # Create HuggingFace Datasets
-    print("Creating HuggingFace Datasets...", flush=True)
-    train_dataset = Dataset.from_list(train_samples)
-    val_dataset = Dataset.from_list(val_samples)
+    # Create HuggingFace Dataset
+    print("Creating HuggingFace Dataset...", flush=True)
+    dataset = Dataset.from_list(sft_samples)
 
     # Save to disk
     output_path = Path(args.output_path)
-    output_path.mkdir(parents=True, exist_ok=True)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
 
-    print(f"Saving train dataset to {output_path}/train...", flush=True)
-    train_dataset.save_to_disk(str(output_path / "train"))
-
-    print(f"Saving validation dataset to {output_path}/validation...", flush=True)
-    val_dataset.save_to_disk(str(output_path / "validation"))
+    print(f"Saving {args.split_name} dataset to {output_path}...", flush=True)
+    dataset.save_to_disk(str(output_path))
 
     print("\n=== Conversion Complete ===")
-    print(f"Train samples: {len(train_dataset)}")
-    print(f"Validation samples: {len(val_dataset)}")
-    print(f"Dataset columns: {train_dataset.column_names}")
+    print(f"Split: {args.split_name}")
+    print(f"Samples: {len(dataset)}")
+    print(f"Dataset columns: {dataset.column_names}")
     print(f"\nDataset saved to: {output_path}")
-    print(f"\nYou can now train with:")
-    print(f"  python train_sft_safe.py --dataset_path {output_path}")
+    print(f"\nExample usage:")
+    print(f"  from datasets import load_from_disk")
+    print(f"  dataset = load_from_disk('{output_path}')")
 
 
 if __name__ == "__main__":
