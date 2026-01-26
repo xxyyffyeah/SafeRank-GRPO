@@ -88,6 +88,8 @@ def parse_args():
     parser.add_argument("--upload_wandb", action="store_true", help="Upload results to Weights & Biases.")
     parser.add_argument("--eval_last_only", action="store_true",
                         help="Only evaluate the last checkpoint instead of every 200 steps")
+    parser.add_argument("--split", default="test", choices=["train", "validation", "test"],
+                        help="Which split to evaluate (default: test)")
     return parser.parse_args()
 
 
@@ -95,8 +97,8 @@ def main():
     args = parse_args()
     data_root = args.dataset_path
 
-    print(f"📂 Loading validation dataset from {data_root} ...")
-    val_dataset = load_from_disk(os.path.join(data_root, "validation"))
+    print(f"📂 Loading {args.split} dataset from {data_root} ...")
+    val_dataset = load_from_disk(os.path.join(data_root, args.split))
 
     # --- Step 1: Load catalog ---
     with open(args.catalog_path, "rb") as f:
