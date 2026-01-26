@@ -1,155 +1,114 @@
 # Phase 4: SafeRec SFT Evaluation
 
-This directory contains scripts for evaluating the trained SafeRec SFT model.
+> **Note**: This directory contains utility scripts for Phase 4. For complete evaluation documentation, see **[`evaluate/README_EVALUATION.md`](../../evaluate/README_EVALUATION.md)**.
+
+---
 
 ## Overview
 
-After training the SafeRec model (Phase 2-3), this phase evaluates its performance on the validation set, computing standard recommendation metrics (Recall@K, NDCG@K) as well as catalog match ratios.
+Phase 4 evaluates trained SafeRec models on both **recommendation quality** and **safety metrics**.
 
-## Files
+**Main Evaluation Script**: [`evaluate/eval_sft_val_safe.py`](../../evaluate/eval_sft_val_safe.py)
 
-- **`generate_gt_catalog.py`**: Extracts all unique movies from SafeRec dataset to create a ground truth catalog
-- **`run_eval.sh`**: Convenience script to run evaluation with correct paths
+---
 
-## Step 1: Generate Ground Truth Catalog
+## Quick Links
 
-The catalog file (`gt_catalog.pkl`) is required to filter out hallucinated or misspelled movies during evaluation.
+- 📖 **[Complete Evaluation Guide](../../evaluate/README_EVALUATION.md)** - Full documentation
+- 🔧 **[Evaluation Script](../../evaluate/eval_sft_val_safe.py)** - Main evaluation code
+- 📊 **[SafeRec Benchmark](https://huggingface.co/datasets/Dionysianspirit/saferec-benchmark)** - Dataset on HuggingFace
+
+---
+
+## Quick Start
+
+### 1. Generate Ground Truth Catalog
 
 ```bash
 # From project root
-python scripts/phase4_sft_eval/generate_gt_catalog.py --verbose
+python3 scripts/phase4_sft_eval/generate_gt_catalog.py \
+    --saferec_json data/phase2_3_saferec/sft_train_24k_saferec.json \
+    --output gt_catalog_complete.pkl \
+    --verbose
 ```
 
-This will:
-- Extract 7,370+ unique movies from the SafeRec dataset
-- Create `gt_catalog.pkl` in the project root
-- Show statistics about the catalog
+**Output**: `gt_catalog_complete.pkl` (7,403 unique movies)
 
-**Output:**
+### 2. Run Evaluation
+
+```bash
+cd evaluate
+python3 eval_sft_val_safe.py \
+    --model_name "Qwen/Qwen2.5-0.5B-Instruct" \
+    --model_root "../results/Qwen/Qwen2.5-0.5B-Instruct" \
+    --dataset_path "../downloaded_datasets/processed_datasets/saferec_sft_dataset" \
+    --catalog_path "../gt_catalog_complete.pkl" \
+    --trait_sensitivity_path "../downloaded_datasets/movie_trait_sensitivity.json" \
+    --title_mapping_path "../data/phase1_mapping/title_to_imdb.pkl"
 ```
-Total unique movies: 7,370
+
+---
+
+## Files in This Directory
+
+### `generate_gt_catalog.py`
+
+**Purpose**: Extract unique movies from SafeRec dataset to create ground truth catalog
+
+**Usage**:
+```bash
+python3 generate_gt_catalog.py \
+    --saferec_json data/phase2_3_saferec/sft_train_24k_saferec.json \
+    --output gt_catalog_complete.pkl \
+    --verbose
+```
+
+**Output Statistics**:
+```
+Total samples processed: 21,425
+Total unique movies: 7,403
 Year range: 1902 - 2024
 Average year: 1998.4
 ```
 
-## Step 2: Run Evaluation
+**What it does**:
+1. Loads SafeRec JSON datasets (train/test/validation)
+2. Extracts all movies from ground truth, recommendations, etc.
+3. Creates deduplicated catalog of (movie_title, year) tuples
+4. Saves as pickle file for fast loading during evaluation
 
-```bash
-# From scripts/phase4_sft_eval directory
-bash run_eval.sh
+---
 
-# Or run directly from project root
-cd evaluate
-python eval_sft_val.py \
-    --model_name "Qwen/Qwen2.5-0.5B-Instruct" \
-    --model_root "../results/Qwen/Qwen2.5-0.5B-Instruct" \
-    --dataset_path "../downloaded_datasets/processed_datasets/saferec_sft_dataset" \
-    --catalog_path "../gt_catalog.pkl" \
-    --output_dir "figs_saferec"
-```
+## Evaluation Metrics
 
-## What the Evaluation Does
+The evaluation computes **two categories** of metrics:
 
-The evaluation script (`evaluate/eval_sft_val.py`) performs the following:
+### 1. Recommendation Quality
 
-1. **Load catalog and dataset** - 667 validation samples
-2. **Find checkpoints** - Evaluates step 0, 200, 400, ..., 630
-3. **Generate recommendations** - Uses vLLM for efficient batch inference
-4. **Compute metrics**:
-   - **Catalog Match Ratio**: % of recommendations that exist in the catalog
-   - **Recall@K**: How many ground truth movies appear in top-K recommendations
-   - **NDCG@K**: Quality of ranking (considers position of correct recommendations)
+- **Catalog Match Ratio**: % of recommendations that are real movies
+- **Recall@K**: Fraction of ground truth found in top-K (K = 5, 10, 15, 20)
+- **NDCG@K**: Ranking quality score
 
-## Understanding the Metrics
+### 2. Safety Metrics (Lower is Better)
 
-### Catalog Match Ratio
-- **What it measures**: Percentage of model recommendations that are real movies (not hallucinated)
-- **Good score**: > 90%
-- **Poor score**: < 70% (model is hallucinating or misspelling movie titles)
+- **Sensitivity DCG@K**: Cumulative gain for sensitive movies
+- **Sensitive Count@K**: Number of unsafe recommendations
+- **Sensitive Ratio@K**: Percentage of unsafe recommendations
 
-### Recall@K
-- **What it measures**: Fraction of ground truth movies found in top-K recommendations
-- **Example**: If GT has 3 movies and top-10 recommendations contain 2 of them, Recall@10 = 2/3 = 66.7%
-- **K values**: 5, 10, 15, 20
+**See**: [Complete Metrics Documentation](../../evaluate/README_EVALUATION.md#evaluation-metrics)
 
-### NDCG@K (Normalized Discounted Cumulative Gain)
-- **What it measures**: Quality of ranking (penalizes relevant movies that appear lower in the list)
-- **Range**: 0.0 to 1.0
-- **Higher is better**: Means good movies are ranked higher
+---
 
-## Output Files
+## Evaluating Baseline Models
 
-After evaluation, check these files in `results/Qwen/Qwen2.5-0.5B-Instruct/`:
+To compare SafeRec with baseline models, see [Baseline Evaluation Guide](../../evaluate/README_EVALUATION.md#evaluating-baseline-models)
 
-- **`analysis.json`**: Metrics summary for all checkpoints
-- **`output.pkl`**: Full recommendations for all samples
-- **`trainer_state.json`**: Training history
-- **`figs_saferec/`**: Loss plots
+---
 
-Example `analysis.json`:
-```json
-{
-  "catalog_ratios": [
-    {"step": 0, "mean": 0.85, "std": 0.12},
-    {"step": 200, "mean": 0.92, "std": 0.08},
-    ...
-  ],
-  "avg_metrics": {
-    "0": {
-      "recall": {"5": 0.15, "10": 0.28, "15": 0.35, "20": 0.42},
-      "ndcg": {"5": 0.18, "10": 0.24, "15": 0.27, "20": 0.29}
-    },
-    "630": {
-      "recall": {"5": 0.32, "10": 0.52, "15": 0.61, "20": 0.68},
-      "ndcg": {"5": 0.35, "10": 0.42, "15": 0.45, "20": 0.47}
-    }
-  }
-}
-```
+## Full Documentation
 
-## Requirements
+👉 **[Complete Evaluation Guide](../../evaluate/README_EVALUATION.md)**
 
-The evaluation requires:
-- **vLLM**: For efficient batch inference
-  ```bash
-  pip install vllm
-  ```
-- **GPU**: Sufficient memory to load the model (Qwen2.5-0.5B needs ~2GB)
-- **Catalog file**: `gt_catalog.pkl` (generated in Step 1)
+---
 
-## Troubleshooting
-
-### Error: "No module named 'vllm'"
-```bash
-pip install vllm
-```
-
-### Error: "Catalog file not found"
-```bash
-python scripts/phase4_sft_eval/generate_gt_catalog.py
-```
-
-### Out of GPU memory
-Reduce `gpu_memory_utilization` in the script:
-```python
-llm = LLM(model=..., gpu_memory_utilization=0.6)  # Default is 0.8
-```
-
-## Expected Runtime
-
-- **Catalog generation**: < 1 minute
-- **Evaluation** (7 checkpoints × 667 samples):
-  - With GPU: ~10-20 minutes
-  - Depends on GPU speed and model size
-
-## Integration with W&B (Optional)
-
-To upload results to Weights & Biases:
-```bash
-python eval_sft_val.py ... --upload_wandb
-```
-
-This requires W&B account and login:
-```bash
-wandb login
-```
+**Last Updated**: 2026-01-26
