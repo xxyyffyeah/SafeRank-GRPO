@@ -9,20 +9,30 @@ DATASET_PATH="downloaded_datasets/processed_datasets/saferec_sft_dataset"
 MODEL_NAME="Qwen/Qwen2.5-0.5B-Instruct"
 LOG_DIR="./logs"
 
-# Training hyperparameters (consistent with train_sft.py defaults)
-NUM_EPOCHS=10
-TRAIN_BATCH_SIZE=12
-EVAL_BATCH_SIZE=12
-GRAD_ACCUM_STEPS=8
+# Dataset info (扩展后的数据集)
+# Train: 19,086 samples (目标 24k，过滤后实际值)
+# Test: 1,212 samples
+# Validation: 1,127 samples
+# GT threshold: >=2 (降低自原始的 >=3)
+
+# Training hyperparameters
+# 数据集从 ~8k 扩展到 19,086 (2.4x)
+# 训练步数计算: 19,086 / (12 * 8) = ~198 steps/epoch
+# 5 epochs = ~990 steps (平衡方案)
+# 7 epochs = ~1,386 steps (接近官方 1,500 steps)
+NUM_EPOCHS=7
+TRAIN_BATCH_SIZE=4
+EVAL_BATCH_SIZE=4
+GRAD_ACCUM_STEPS=24  # Effective batch size = 96
 LEARNING_RATE=5e-5
 WARMUP_RATIO=0.05
 OPTIM="paged_adamw_8bit"
 LR_SCHEDULER_TYPE="cosine"
 MAX_LENGTH=1024
 DATASET_NUM_PROC=64
-SAVE_STEPS=50
-LOGGING_STEPS=10
-EVAL_STEPS=10
+SAVE_STEPS=100
+LOGGING_STEPS=100
+EVAL_STEPS=100
 SEED=3407
 
 # Create log directory
@@ -32,16 +42,25 @@ mkdir -p ${LOG_DIR}
 TIMESTAMP=$(date +"%Y%m%d_%H%M%S")
 LOG_FILE="${LOG_DIR}/saferec_sft_${TIMESTAMP}.log"
 
-echo "======================================"
-echo "SafeRec SFT Training"
-echo "======================================"
+echo "========================================"
+echo "SafeRec SFT Training (扩展数据集)"
+echo "========================================"
 echo "Model: ${MODEL_NAME}"
 echo "Dataset: ${DATASET_PATH}"
-echo "Epochs: ${NUM_EPOCHS}"
-echo "Batch size: ${TRAIN_BATCH_SIZE} (grad accum: ${GRAD_ACCUM_STEPS})"
-echo "Learning rate: ${LEARNING_RATE}"
+echo "  - Train samples: 19,086"
+echo "  - Validation samples: 1,127"
+echo "  - Test samples: 1,212"
+echo ""
+echo "Training config:"
+echo "  - Epochs: ${NUM_EPOCHS}"
+echo "  - Steps per epoch: ~198"
+echo "  - Total steps: ~$((NUM_EPOCHS * 198))"
+echo "  - Batch size: ${TRAIN_BATCH_SIZE} × ${GRAD_ACCUM_STEPS} = 96 (effective)"
+echo "  - Learning rate: ${LEARNING_RATE}"
+echo "  - Optimizer: ${OPTIM}"
+echo ""
 echo "Log file: ${LOG_FILE}"
-echo "======================================"
+echo "========================================"
 echo ""
 
 # Check if dataset exists
