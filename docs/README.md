@@ -20,7 +20,13 @@ SafeRec: Safety-Aligned Recommendation System - 完整实施文档
 | [TRAIT_ASSIGNMENT_PLAN.md](./TRAIT_ASSIGNMENT_PLAN.md) | 📌 **Trait 自动标注详细计划** |
 | [QUICK_START_TRAIT_ASSIGNMENT.md](./QUICK_START_TRAIT_ASSIGNMENT.md) | 🚀 **快速上手指南** |
 
-### 3. 技术参考
+### 3. Safe-Rank-GRPO（Phase 6）
+
+| 文档 | 说明 |
+|------|------|
+| [SAFE_RANK_GRPO.md](./SAFE_RANK_GRPO.md) | 📌 **Safe-Rank-GRPO 训练实现** |
+
+### 4. 技术参考
 
 | 文档 | 说明 |
 |------|------|
@@ -59,6 +65,10 @@ Phase 4: CoT 数据生成
 Phase 5: 训练集成
     ├── [5.1] 修改训练流程
     └── [5.2] 配置文件
+
+Phase 6: Safe-Rank-GRPO ✅
+    ├── [6.1] safe_reward_funcs.py ✅
+    └── [6.2] train_rank_grpo_safe.py ✅
 ```
 
 ---
@@ -71,6 +81,11 @@ Phase 5: 训练集成
   - 922,204 条映射
   - 93.2% SFT 数据集覆盖率
   - 70.5% Trait Sensitivity 覆盖率
+
+- [x] **Phase 6 完成** (Safe-Rank-GRPO)
+  - libs/safe_reward_funcs.py
+  - train_rank_grpo_safe.py
+  - 支持 per-rank 安全惩罚
 
 ### 🚧 进行中
 
@@ -128,7 +143,8 @@ Rank-GRPO/
 │   └── processed_datasets/sft_dataset # ✅ 原始 SFT 数据
 │
 └── libs/                              # 模块库
-    ├── safety_oracle.py               # Phase 2（待开发）
+    ├── safety_oracle.py               # ✅ Phase 2
+    ├── safe_reward_funcs.py           # ✅ Phase 6 安全奖励函数
     └── constraint_injector.py         # Phase 3（待开发）
 ```
 
@@ -194,6 +210,7 @@ Rank-GRPO/
 
 | 日期 | 版本 | 更新内容 |
 |------|------|---------|
+| 2026-01-28 | v0.4 | 完成 Phase 6 Safe-Rank-GRPO 实现 |
 | 2026-01-14 | v0.3 | 添加 Trait Assignment 计划（Phase 0） |
 | 2026-01-14 | v0.2 | 完成 Phase 1 映射构建 |
 | 2026-01-13 | v0.1 | 初始文档结构 |

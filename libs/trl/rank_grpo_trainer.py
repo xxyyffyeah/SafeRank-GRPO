@@ -78,7 +78,10 @@ if is_liger_kernel_available():
 
 if is_vllm_available():
     from vllm import LLM, SamplingParams
-    from vllm.sampling_params import GuidedDecodingParams
+    try:
+        from vllm.sampling_params import GuidedDecodingParams
+    except ImportError:
+        GuidedDecodingParams = None  # vLLM >= 0.13.0 removed this
 
 if is_wandb_available():
     import wandb
@@ -1564,7 +1567,7 @@ class RankGRPOTrainer(Trainer):
 
             # Generate completions using colocated vLLM instances: each device holds vLLM copy and work on their own batch of prompts
             elif self.vllm_mode == "colocate":
-                if self.guided_decoding_regex:
+                if self.guided_decoding_regex and GuidedDecodingParams is not None:
                     guided_decoding = GuidedDecodingParams(regex=self.guided_decoding_regex)
                 else:
                     guided_decoding = None
@@ -1577,8 +1580,10 @@ class RankGRPOTrainer(Trainer):
                     "top_k": -1 if self.top_k is None else self.top_k,
                     "min_p": 0.0 if self.min_p is None else self.min_p,
                     "max_tokens": self.max_completion_length,
-                    "guided_decoding": guided_decoding,
                 }
+                # Only add guided_decoding if supported (vLLM < 0.13.0)
+                if guided_decoding is not None:
+                    generation_kwargs["guided_decoding"] = guided_decoding
                 if self.args.generation_kwargs is not None:
                     generation_kwargs.update(self.args.generation_kwargs)
                 sampling_params = SamplingParams(**generation_kwargs)
