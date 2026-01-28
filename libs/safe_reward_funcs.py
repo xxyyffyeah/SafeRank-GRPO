@@ -120,7 +120,8 @@ def safe_reward_func_log_decay(
                     title=title, year=year, constraints=user_constraints
                 )
                 if not result.is_safe:
-                    safety_penalties[k] = -lambda_safe * penalty_safe
+                    # Apply same log decay weighting as relevance reward
+                    safety_penalties[k] = -lambda_safe * penalty_safe * discounts[k]
 
         rewards_total = rewards_rel + safety_penalties
         batch_rewards.append(rewards_total.tolist())
@@ -208,6 +209,7 @@ def safe_reward_func_exp_inf(
     title_normalizer = kwargs.get("title_normalizer")
     year_tolerance = int(kwargs.get("year_tolerance", 2))
     rec_num = int(rec_num)
+    discounts = _discounts(rec_num)
 
     batch_rewards = []
     for recs, gt_with_year, seen, user_constraints in zip(
@@ -246,7 +248,8 @@ def safe_reward_func_exp_inf(
                     title=title, year=year, constraints=user_constraints
                 )
                 if not result.is_safe:
-                    safety_penalties[k] = -lambda_safe * penalty_safe
+                    # Apply same log decay weighting as relevance reward
+                    safety_penalties[k] = -lambda_safe * penalty_safe * discounts[k]
 
         rewards_total = hits + safety_penalties
         batch_rewards.append(rewards_total.tolist())

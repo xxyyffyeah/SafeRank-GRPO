@@ -169,6 +169,47 @@ python train_rank_grpo_safe.py \
     --risk_threshold 0.66
 ```
 
+### 双卡训练
+
+使用 `accelerate launch` 启动多 GPU 训练：
+
+```bash
+accelerate launch --num_processes 2 train_rank_grpo_safe.py \
+    --train_path ./downloaded_datasets/processed_datasets/saferec_sft_dataset \
+    --model_name Qwen/Qwen2.5-0.5B-Instruct \
+    --sft_checkpoint 800 \
+    --catalog_path gt_catalog_complete.pkl \
+    --lr 1e-6 \
+    --adam_beta1 0.9 \
+    --adam_beta2 0.99 \
+    --kl_beta 1e-3 \
+    --gradient_accumulation_steps 24 \
+    --optim paged_adamw_8bit \
+    --per_device_train_batch_size 1 \
+    --per_device_eval_batch_size 1 \
+    --num_train_epochs 2 \
+    --mu 1 \
+    --max_prompt_length 2048 \
+    --max_completion_length 512 \
+    --num_generations 4 \
+    --use_vllm \
+    --vllm_mode colocate \
+    --vllm_gpu_memory_utilization 0.35 \
+    --vllm_tensor_parallel_size 2 \
+    --wandb_project safe_rank_grpo \
+    --logging_steps 10 \
+    --save_strategy steps \
+    --save_steps 200 \
+    --seed 3407 \
+    --bf16 \
+    --gradient_checkpointing \
+    --lambda_safe 0.5 \
+    --penalty_safe 0.5 \
+    --risk_threshold 0.66
+```
+
+> **注意**：`--vllm_tensor_parallel_size` 必须等于 `--num_processes`，且能整除 world size。
+
 ### 调整惩罚强度
 
 ```bash
