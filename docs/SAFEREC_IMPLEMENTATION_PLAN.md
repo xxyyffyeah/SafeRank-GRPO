@@ -18,7 +18,7 @@
 
 ### 0.1 概述
 
-**目标**: 使用 ChatGPT API 为 8,000 个高质量 SFT 样本自动分配用户敏感特征（trait）
+**目标**: 使用 ChatGPT API 为 24000 个高质量 SFT 样本自动分配用户敏感特征（trait）
 
 **详细计划**: 参见 [TRAIT_ASSIGNMENT_PLAN.md](./TRAIT_ASSIGNMENT_PLAN.md)
 
@@ -27,7 +27,7 @@
 ```
 SFT Dataset (95,753)
     ↓ 筛选 GT ≥ 3
-8,000 samples
+24000 samples
     ↓ ChatGPT API 标注
 Assigned Traits
     ↓ 过滤违规 GT
