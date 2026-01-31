@@ -153,6 +153,20 @@ def main():
     print("🧠 Generating recommendations across checkpoints ...")
     model_path_tmpl = os.path.join(model_root, "checkpoint-{}")
 
+    # Filter out checkpoints that don't exist on disk (skip step 0 which uses baseline)
+    valid_step_list = []
+    for step in step_list:
+        if step == 0:
+            valid_step_list.append(step)
+        else:
+            ckpt_path = model_path_tmpl.format(step)
+            if os.path.isdir(ckpt_path) and os.path.isfile(os.path.join(ckpt_path, "config.json")):
+                valid_step_list.append(step)
+            else:
+                print(f"⚠️  Skipping step {step}: checkpoint not found or incomplete")
+    step_list = valid_step_list
+    print(f"📌 Valid checkpoints to evaluate: {step_list}")
+
     for step in step_list:
         if step in llm_outputs:
             continue

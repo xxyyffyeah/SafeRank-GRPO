@@ -1,9 +1,9 @@
 #!/bin/bash
 set -e
-
+export NCCL_P2P_DISABLE=1
 mkdir -p logs
 
-MAX_RETRIES=5
+MAX_RETRIES=1
 RETRY=0
 
 while [ $RETRY -lt $MAX_RETRIES ]; do
@@ -30,7 +30,7 @@ while [ $RETRY -lt $MAX_RETRIES ]; do
         --num_train_epochs 2 \
         --gradient_accumulation_steps 4 \
         --save_strategy steps \
-        --save_steps 200 \
+        --save_steps 1000 \
         --logging_steps 10 \
         --use_vllm \
         --vllm_mode colocate \
@@ -44,6 +44,7 @@ while [ $RETRY -lt $MAX_RETRIES ]; do
         --gradient_checkpointing \
         --wandb_project rank_grpo \
         --catalog_path gt_catalog_complete.pkl \
+        --max_steps 20000 \
         $RESUME_FLAG \
         2>&1 | tee -a logs/rank_grpo_2gpu.txt
     EXIT_CODE=${PIPESTATUS[0]}

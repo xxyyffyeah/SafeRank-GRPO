@@ -1,6 +1,7 @@
 import os
 from datasets import load_from_disk
 from trl import GRPOConfig, RankGRPOTrainer
+from peft import LoraConfig
 import argparse
 
 from libs.data import load_catalog
@@ -189,6 +190,26 @@ def parse_args():
         help="Resume training from the latest checkpoint.",
     )
 
+    lora = parser.add_argument_group("LoRA / PEFT parameters")
+    lora.add_argument(
+        "--use_lora", action="store_true", help="Enable LoRA (Low-Rank Adaptation) training.",
+    )
+    lora.add_argument(
+        "--lora_r", type=int, default=16, help="LoRA rank (dimension of low-rank matrices).",
+    )
+    lora.add_argument(
+        "--lora_alpha", type=int, default=32, help="LoRA scaling factor (alpha / r = effective scale).",
+    )
+    lora.add_argument(
+        "--lora_dropout", type=float, default=0.05, help="Dropout probability for LoRA layers.",
+    )
+    lora.add_argument(
+        "--lora_target_modules",
+        nargs="+",
+        default=["q_proj", "v_proj", "k_proj", "o_proj", "gate_proj", "up_proj", "down_proj"],
+        help="Module names to apply LoRA to.",
+    )
+
     misc = parser.add_argument_group("Miscellaneous")
     misc.add_argument(
         "--seed", type=int, default=3407, help="Random seed for reproducibility."
@@ -259,9 +280,10 @@ def main():
             raise ValueError(f"{args.reward_func} not implemented!")
 
     sft_model_path = f"./results/{args.model_name}/checkpoint-{args.sft_checkpoint}"
+    lora_suffix = f"_lora_r{args.lora_r}" if args.use_lora else ""
     output_dir = (
         f"./results/safe_grpo/{args.model_name}"
-        f"_{args.advantage_mode}"
+        f"_{args.advantage_mode}{lora_suffix}"
         f"_lr{args.lr}_kl{args.kl_beta}_mu{args.mu}"
         f"_lambda{args.lambda_safe}_penalty{args.penalty_safe}"
     )
@@ -315,12 +337,28 @@ def main():
     # Pass advantage_mode to trainer via config attribute
     config.advantage_mode = args.advantage_mode
 
+    # Build LoRA config if enabled
+    peft_config = None
+    if args.use_lora:
+        peft_config = LoraConfig(
+            r=args.lora_r,
+            lora_alpha=args.lora_alpha,
+            lora_dropout=args.lora_dropout,
+            target_modules=args.lora_target_modules,
+            task_type="CAUSAL_LM",
+        )
+        accelerator.print(
+            f"[LoRA] Enabled: r={args.lora_r}, alpha={args.lora_alpha}, "
+            f"dropout={args.lora_dropout}, targets={args.lora_target_modules}"
+        )
+
     trainer = RankGRPOTrainer(
         model=sft_model_path,
         reward_funcs=reward_func,
         args=config,
         train_dataset=train_dataset,
         callbacks=[callback],
+        peft_config=peft_config,
     )
 
     accelerator.print(
