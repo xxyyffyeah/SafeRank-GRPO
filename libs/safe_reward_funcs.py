@@ -291,3 +291,212 @@ def make_safe_reward_func_individual(
         )
 
     return wrapped
+
+
+# ---------------------------------------------------------------------------
+# GDPO split reward functions: relevance-only and safety-only
+# ---------------------------------------------------------------------------
+
+def _parse_and_evaluate(
+    completions, groundtruth_with_release_year, seen_titles, rec_num, gt_catalog, **kwargs
+):
+    """Shared parsing and hit evaluation for split reward functions."""
+    title_normalizer = kwargs.get("title_normalizer", None)
+    year_tolerance = int(kwargs.get("year_tolerance", 2))
+    rec_num = int(rec_num)
+
+    results = []
+    for recs, gt_with_year, seen in zip(completions, groundtruth_with_release_year, seen_titles):
+        recs_text = recs[0]["content"]
+        item = {
+            "raw_recs": recs_text,
+            "groundtruth_with_release_year": gt_with_year,
+            "seen_titles": seen,
+        }
+
+        error, item = process_rec_raw(item, "raw_recs", "recs")
+        if error:
+            results.append((True, None, None))
+            continue
+
+        hits = evaluate_direct_match_aligned(
+            item=item,
+            rec_num=rec_num,
+            seen_field="seen_titles",
+            rec_field="recs",
+            gt_field="groundtruth_with_release_year",
+            gt_catalog=gt_catalog,
+            title_normalizer=title_normalizer,
+            year_tolerance=year_tolerance,
+        ).astype(np.float64)
+
+        parsed_recs = item.get("recs", [])
+        results.append((False, hits, parsed_recs))
+    return results
+
+
+def relevance_only_log_decay(
+    completions, groundtruth_with_release_year, seen_titles,
+    rec_num, gt_catalog, **kwargs,
+) -> List[List[float]]:
+    """Relevance-only reward (log_decay DCG), no safety penalty."""
+    rec_num = int(rec_num)
+    discounts = _discounts(rec_num)
+    parsed = _parse_and_evaluate(
+        completions, groundtruth_with_release_year, seen_titles, rec_num, gt_catalog, **kwargs
+    )
+    batch_rewards = []
+    for error, hits, _ in parsed:
+        if error:
+            batch_rewards.append([0.0] * rec_num)
+            continue
+        gains = hits * discounts
+        total_dcg = float(gains.sum())
+        prefix_excl = np.concatenate(([0.0], np.cumsum(gains)[:-1]))
+        rewards_rel = total_dcg - prefix_excl
+        batch_rewards.append(rewards_rel.tolist())
+    return batch_rewards
+
+
+def relevance_only_exp_inf(
+    completions, groundtruth_with_release_year, seen_titles,
+    rec_num, gt_catalog, **kwargs,
+) -> List[List[float]]:
+    """Relevance-only reward (exp_inf hits), no safety penalty."""
+    rec_num = int(rec_num)
+    parsed = _parse_and_evaluate(
+        completions, groundtruth_with_release_year, seen_titles, rec_num, gt_catalog, **kwargs
+    )
+    batch_rewards = []
+    for error, hits, _ in parsed:
+        if error:
+            batch_rewards.append([0.0] * rec_num)
+            continue
+        batch_rewards.append(hits.tolist())
+    return batch_rewards
+
+
+def safety_only_log_decay(
+    completions, groundtruth_with_release_year, seen_titles,
+    constraints, rec_num, gt_catalog, safety_oracle,
+    lambda_safe=1.0, penalty_safe=1.0, **kwargs,
+) -> List[List[float]]:
+    """Safety-only penalty reward (log_decay weighted), no relevance."""
+    rec_num = int(rec_num)
+    discounts = _discounts(rec_num)
+    parsed = _parse_and_evaluate(
+        completions, groundtruth_with_release_year, seen_titles, rec_num,
+        gt_catalog, **kwargs
+    )
+    batch_rewards = []
+    for (error, _, parsed_recs), user_constraints in zip(parsed, constraints):
+        if error:
+            batch_rewards.append([0.0] * rec_num)
+            continue
+        penalties = np.zeros(rec_num, dtype=np.float64)
+        for k in range(rec_num):
+            if k < len(parsed_recs):
+                title, year = parsed_recs[k]
+                result = safety_oracle.check_safety(
+                    title=title, year=year, constraints=user_constraints
+                )
+                if not result.is_safe:
+                    penalties[k] = -lambda_safe * penalty_safe * discounts[k]
+        batch_rewards.append(penalties.tolist())
+    return batch_rewards
+
+
+def safety_only_exp_inf(
+    completions, groundtruth_with_release_year, seen_titles,
+    constraints, rec_num, gt_catalog, safety_oracle,
+    lambda_safe=1.0, penalty_safe=1.0, **kwargs,
+) -> List[List[float]]:
+    """Safety-only penalty reward (exp_inf discount weighted), no relevance."""
+    rec_num = int(rec_num)
+    discounts = _discounts(rec_num)
+    parsed = _parse_and_evaluate(
+        completions, groundtruth_with_release_year, seen_titles, rec_num,
+        gt_catalog, **kwargs
+    )
+    batch_rewards = []
+    for (error, _, parsed_recs), user_constraints in zip(parsed, constraints):
+        if error:
+            batch_rewards.append([0.0] * rec_num)
+            continue
+        penalties = np.zeros(rec_num, dtype=np.float64)
+        for k in range(rec_num):
+            if k < len(parsed_recs):
+                title, year = parsed_recs[k]
+                result = safety_oracle.check_safety(
+                    title=title, year=year, constraints=user_constraints
+                )
+                if not result.is_safe:
+                    penalties[k] = -lambda_safe * penalty_safe * discounts[k]
+        batch_rewards.append(penalties.tolist())
+    return batch_rewards
+
+
+# ---------------------------------------------------------------------------
+# GDPO factory functions
+# ---------------------------------------------------------------------------
+
+def make_relevance_func(rec_num: int, gt_catalog: Any) -> callable:
+    """Factory: relevance-only reward (log_decay) for GDPO."""
+    @wraps(relevance_only_log_decay)
+    def wrapped(completions, groundtruth_with_release_year, seen_titles, **kwargs):
+        kwargs.pop("constraints", None)
+        return relevance_only_log_decay(
+            completions, groundtruth_with_release_year, seen_titles,
+            rec_num=rec_num, gt_catalog=gt_catalog, **kwargs,
+        )
+    return wrapped
+
+
+def make_relevance_func_individual(rec_num: int, gt_catalog: Any) -> callable:
+    """Factory: relevance-only reward (exp_inf) for GDPO."""
+    @wraps(relevance_only_exp_inf)
+    def wrapped(completions, groundtruth_with_release_year, seen_titles, **kwargs):
+        kwargs.pop("constraints", None)
+        return relevance_only_exp_inf(
+            completions, groundtruth_with_release_year, seen_titles,
+            rec_num=rec_num, gt_catalog=gt_catalog, **kwargs,
+        )
+    return wrapped
+
+
+def make_safety_func(
+    rec_num: int, gt_catalog: Any, safety_oracle: SafetyOracle,
+    lambda_safe: float = 1.0, penalty_safe: float = 1.0,
+) -> callable:
+    """Factory: safety-only penalty (log_decay weighted) for GDPO."""
+    @wraps(safety_only_log_decay)
+    def wrapped(completions, groundtruth_with_release_year, seen_titles, **kwargs):
+        constraints = kwargs.pop("constraints", None)
+        if constraints is None:
+            constraints = [{}] * len(completions)
+        return safety_only_log_decay(
+            completions, groundtruth_with_release_year, seen_titles,
+            constraints=constraints, rec_num=rec_num, gt_catalog=gt_catalog,
+            safety_oracle=safety_oracle,
+            lambda_safe=lambda_safe, penalty_safe=penalty_safe, **kwargs,
+        )
+    return wrapped
+
+
+def make_safety_func_individual(
+    rec_num: int, gt_catalog: Any, safety_oracle: SafetyOracle,
+    lambda_safe: float = 1.0, penalty_safe: float = 1.0,
+) -> callable:
+    """Factory: safety-only penalty (exp_inf discount weighted) for GDPO."""
+    @wraps(safety_only_exp_inf)
+    def wrapped(completions, groundtruth_with_release_year, seen_titles, **kwargs):
+        constraints = kwargs.pop("constraints", None)
+        if constraints is None:
+            constraints = [{}] * len(completions)
+        return safety_only_exp_inf(
+            completions, groundtruth_with_release_year, seen_titles,
+            constraints=constraints, rec_num=rec_num, gt_catalog=gt_catalog,
+            safety_oracle=safety_oracle,
+            lambda_safe=lambda_safe, penalty_safe=penalty_safe, **kwargs,
+        )
+    return wrapped

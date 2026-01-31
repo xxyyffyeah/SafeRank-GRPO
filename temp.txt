@@ -1,62 +1,80 @@
-accelerate launch --num_processes 2 train_rank_grpo.py
---train_path processed_datasets/grpo/grpo_dataset  \
---model_name qwen/Qwen2.5-0.5B-Instruct \
---sft_checkpoint 800 \
---reward_func exp_inf \
---mu 1 \
---lr 1e-6 \
---kl_beta 1e-3 \
---adam_beta1 0.9 \
---adam_beta2 0.99 \
---per_device_train_batch_size 1 \
---per_device_eval_batch_size 1 \
---num_train_epochs 2 \
---gradient_accumulation_steps 6 \
---save_strategy steps \
---save_steps 200 \
---logging_steps 10 \
---use_vllm \
---vllm_mode colocate \
---vllm_gpu_memory_utilization 0.5 \
---vllm_tensor_parallel_size 8 \
---max_prompt_length 2048 \
---max_completion_length 1024 \
---num_generations 8 \
---seed 3407 \
---wandb_project rank_grpo \
---catalog_path gt_catalog_complete.pkl \
-2>&1 | tee logs/outputs_qwen25_0.5b_zero.txt
+cd evaluate
+python3 eval_sft_val_safe.py \
+    --model_name "Qwen/Qwen2.5-0.5B-Instruct" \
+    --model_root "../results/grpo/Qwen/Qwen2.5-0.5B-Instruct_lr1e-06_kl0.001_mu1" \
+    --dataset_path "../downloaded_datasets/processed_datasets/saferec_sft_dataset" \
+    --catalog_path "../gt_catalog_complete.pkl" \
+    --trait_sensitivity_path "../downloaded_datasets/movie_trait_sensitivity.json" \
+    --title_mapping_path "../data/phase1_mapping/title_to_imdb.pkl" \
+    --output_dir "figs_saferec" \
+    --baseline_model "../results/Qwen/Qwen2.5-0.5B-Instruct/checkpoint-800" 
 
+  命令 1：Safe Rank-GRPO（~1004 steps）                                                                                                            
+                                                                                                                                                   
+  accelerate launch --num_processes 2 train_rank_grpo_safe.py \                                                                                    
+      --train_path ./downloaded_datasets/processed_datasets/saferec_sft_dataset \                                                                  
+      --model_name Qwen/Qwen2.5-0.5B-Instruct \                                                                                                    
+      --sft_checkpoint 800 \                                                                                                                       
+      --catalog_path gt_catalog_complete.pkl \                                                                                                     
+      --lr 1e-6 \                                                                                                                                  
+      --adam_beta1 0.9 \                                                                                                                           
+      --adam_beta2 0.99 \                                                                                                                          
+      --kl_beta 1e-3 \                                                                                                                             
+      --gradient_accumulation_steps 19 \                                                                                                           
+      --optim paged_adamw_8bit \                                                                                                                   
+      --per_device_train_batch_size 1 \                                                                                                            
+      --per_device_eval_batch_size 1 \                                                                                                             
+      --num_train_epochs 2 \                                                                                                                       
+      --mu 1 \                                                                                                                                     
+      --max_prompt_length 2048 \                                                                                                                   
+      --max_completion_length 512 \                                                                                                                
+      --num_generations 4 \                                                                                                                        
+      --use_vllm \                                                                                                                                 
+      --vllm_mode colocate \                                                                                                                       
+      --vllm_gpu_memory_utilization 0.35 \                                                                                                         
+      --vllm_tensor_parallel_size 1 \                                                                                                              
+      --wandb_project safe_rank_grpo \                                                                                                             
+      --logging_steps 10 \                                                                                                                         
+      --save_strategy steps \                                                                                                                      
+      --save_steps 200 \                                                                                                                           
+      --seed 3407 \                                                                                                                                
+      --bf16 \                                                                                                                                     
+      --gradient_checkpointing \                                                                                                                   
+      --lambda_safe 0.5 \                                                                                                                          
+      --penalty_safe 0.5 \                                                                                                                         
+      --risk_threshold 0.66 \                                                                                                                      
+      2>&1 | tee logs/safe_grpo_2gpu.txt                                                                                                           
+                                                                                                                                                   
+  命令 2：Rank-GRPO（使用 --max_steps 1000 截断）
 
-accelerate launch --num_processes 2 train_rank_grpo_safe.py \
-    --train_path ./downloaded_datasets/processed_datasets/saferec_sft_dataset \
-    --model_name Qwen/Qwen2.5-0.5B-Instruct \
-    --sft_checkpoint 800 \
-    --catalog_path gt_catalog_complete.pkl \
-    --lr 1e-6 \
-    --adam_beta1 0.9 \
-    --adam_beta2 0.99 \
-    --kl_beta 1e-3 \
-    --gradient_accumulation_steps 24 \
-    --optim paged_adamw_8bit \
-    --per_device_train_batch_size 1 \
-    --per_device_eval_batch_size 1 \
-    --num_train_epochs 2 \
-    --mu 1 \
-    --max_prompt_length 2048 \
-    --max_completion_length 512 \
-    --num_generations 4 \
-    --use_vllm \
-    --vllm_mode colocate \
-    --vllm_gpu_memory_utilization 0.35 \
-    --vllm_tensor_parallel_size 2 \
-    --wandb_project safe_rank_grpo \
-    --logging_steps 10 \
-    --save_strategy steps \
-    --save_steps 200 \
-    --seed 3407 \
-    --bf16 \
-    --gradient_checkpointing \
-    --lambda_safe 0.5 \
-    --penalty_safe 0.5 \
-    --risk_threshold 0.66
+  accelerate launch --num_processes 2 train_rank_grpo.py \
+      --train_path downloaded_datasets/processed_datasets/grpo/grpo_dataset \
+      --model_name Qwen/Qwen2.5-0.5B-Instruct \
+      --sft_checkpoint 800 \
+      --reward_func exp_inf \
+      --mu 1 \
+      --lr 1e-6 \
+      --kl_beta 1e-3 \
+      --adam_beta1 0.9 \
+      --adam_beta2 0.99 \
+      --per_device_train_batch_size 1 \
+      --per_device_eval_batch_size 1 \
+      --num_train_epochs 2 \
+      --max_steps 1000 \
+      --gradient_accumulation_steps 6 \
+      --save_strategy steps \
+      --save_steps 200 \
+      --logging_steps 10 \
+      --use_vllm \
+      --vllm_mode colocate \
+      --vllm_gpu_memory_utilization 0.35 \
+      --vllm_tensor_parallel_size 1 \
+      --max_prompt_length 2048 \
+      --max_completion_length 1024 \
+      --num_generations 8 \
+      --seed 3407 \
+      --bf16 \
+      --gradient_checkpointing \
+      --wandb_project rank_grpo \
+      --catalog_path gt_catalog_complete.pkl \
+      2>&1 | tee logs/rank_grpo_2gpu.txt

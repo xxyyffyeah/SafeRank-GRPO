@@ -68,6 +68,7 @@ def parse_args():
     sched.add_argument("--per_device_train_batch_size", type=int, default=8, help="Training batch size per GPU.")
     sched.add_argument("--per_device_eval_batch_size", type=int, default=8, help="Evaluation batch size per GPU.")
     sched.add_argument("--num_train_epochs", type=int, default=2, help="Number of training epochs.")
+    sched.add_argument("--max_steps", type=int, default=-1, help="Maximum training steps (-1 = use num_train_epochs).")
     sched.add_argument("--mu", type=int, default=1, help="Number of GRPO iterations (μ=1 = strictly on-policy).")
 
     gen = parser.add_argument_group("Model / generation parameters")
@@ -145,6 +146,7 @@ def main():
         per_device_train_batch_size=args.per_device_train_batch_size,
         per_device_eval_batch_size=args.per_device_eval_batch_size,
         num_train_epochs=args.num_train_epochs,
+        max_steps=args.max_steps,
         num_iterations=args.mu,
         save_strategy=args.save_strategy,
         save_steps=args.save_steps,

@@ -90,6 +90,10 @@ def parse_args():
                         help="Only evaluate the last checkpoint instead of every 200 steps")
     parser.add_argument("--split", default="test", choices=["train", "validation", "test"],
                         help="Which split to evaluate (default: test)")
+    parser.add_argument("--baseline_model", default=None,
+                        help="Model path for checkpoint-0 baseline. Defaults to --model_name (base model). "
+                             "Set to an SFT checkpoint path (e.g. ../results/.../checkpoint-800) to use "
+                             "the actual training starting point as baseline.")
     return parser.parse_args()
 
 
@@ -139,7 +143,7 @@ def main():
         step_list = [last_step]
         print(f"📌 Evaluating only the last checkpoint: {last_step}")
     else:
-        step_list = list(range(0, last_step, 200))
+        step_list = list(range(0, last_step, 200)) + [last_step]
         print(f"📌 Evaluating checkpoints every 200 steps: {step_list}")
 
     llm_outputs = {}
@@ -153,7 +157,8 @@ def main():
         if step in llm_outputs:
             continue
         print(f"Processing step {step} ...")
-        model_to_load = args.model_name if step == 0 else model_path_tmpl.format(step)
+        baseline = args.baseline_model if args.baseline_model else args.model_name
+        model_to_load = baseline if step == 0 else model_path_tmpl.format(step)
         llm = LLM(model=model_to_load,
                   tensor_parallel_size=1,
                   gpu_memory_utilization=0.8,

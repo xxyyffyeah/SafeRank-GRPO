@@ -8,6 +8,10 @@ from libs.utils import StepLRSchedulerCallback
 from libs.safe_reward_funcs import (
     make_safe_reward_func,
     make_safe_reward_func_individual,
+    make_relevance_func,
+    make_relevance_func_individual,
+    make_safety_func,
+    make_safety_func_individual,
 )
 from libs.safety_oracle import create_oracle
 from libs.logs import setup_environment, setup_wandb
@@ -193,6 +197,12 @@ def parse_args():
     misc.add_argument(
         "--verbose", action="store_true", help="Enable verbose LR scheduler output."
     )
+    misc.add_argument(
+        "--advantage_mode",
+        default="grpo",
+        choices=["grpo", "gdpo"],
+        help="Advantage computation: grpo (combined normalization) or gdpo (per-reward decoupled normalization).",
+    )
 
     return parser.parse_args()
 
@@ -209,28 +219,49 @@ def main():
     )
     safety_oracle = create_oracle(base_path=".", risk_threshold=args.risk_threshold)
 
-    if args.reward_func == "exp_inf":
-        reward_func = make_safe_reward_func_individual(
-            rec_num=20,
-            gt_catalog=gt_catalog,
-            safety_oracle=safety_oracle,
-            lambda_safe=args.lambda_safe,
-            penalty_safe=args.penalty_safe,
-        )
-    elif args.reward_func == "log_decay":
-        reward_func = make_safe_reward_func(
-            rec_num=20,
-            gt_catalog=gt_catalog,
-            safety_oracle=safety_oracle,
-            lambda_safe=args.lambda_safe,
-            penalty_safe=args.penalty_safe,
-        )
+    if args.advantage_mode == "gdpo":
+        # GDPO: two separate reward functions for decoupled normalization
+        accelerator.print(f"[GDPO] Using decoupled normalization with reward_func={args.reward_func}")
+        if args.reward_func == "exp_inf":
+            relevance_func = make_relevance_func_individual(rec_num=20, gt_catalog=gt_catalog)
+            safety_func = make_safety_func_individual(
+                rec_num=20, gt_catalog=gt_catalog, safety_oracle=safety_oracle,
+                lambda_safe=args.lambda_safe, penalty_safe=args.penalty_safe,
+            )
+        elif args.reward_func == "log_decay":
+            relevance_func = make_relevance_func(rec_num=20, gt_catalog=gt_catalog)
+            safety_func = make_safety_func(
+                rec_num=20, gt_catalog=gt_catalog, safety_oracle=safety_oracle,
+                lambda_safe=args.lambda_safe, penalty_safe=args.penalty_safe,
+            )
+        else:
+            raise ValueError(f"{args.reward_func} not implemented!")
+        reward_func = [relevance_func, safety_func]
     else:
-        raise ValueError(f"{args.reward_func} not implemented!")
+        # GRPO: single combined reward function
+        if args.reward_func == "exp_inf":
+            reward_func = make_safe_reward_func_individual(
+                rec_num=20,
+                gt_catalog=gt_catalog,
+                safety_oracle=safety_oracle,
+                lambda_safe=args.lambda_safe,
+                penalty_safe=args.penalty_safe,
+            )
+        elif args.reward_func == "log_decay":
+            reward_func = make_safe_reward_func(
+                rec_num=20,
+                gt_catalog=gt_catalog,
+                safety_oracle=safety_oracle,
+                lambda_safe=args.lambda_safe,
+                penalty_safe=args.penalty_safe,
+            )
+        else:
+            raise ValueError(f"{args.reward_func} not implemented!")
 
     sft_model_path = f"./results/{args.model_name}/checkpoint-{args.sft_checkpoint}"
     output_dir = (
         f"./results/safe_grpo/{args.model_name}"
+        f"_{args.advantage_mode}"
         f"_lr{args.lr}_kl{args.kl_beta}_mu{args.mu}"
         f"_lambda{args.lambda_safe}_penalty{args.penalty_safe}"
     )
@@ -281,6 +312,9 @@ def main():
         run_name=run_name,
     )
 
+    # Pass advantage_mode to trainer via config attribute
+    config.advantage_mode = args.advantage_mode
+
     trainer = RankGRPOTrainer(
         model=sft_model_path,
         reward_funcs=reward_func,
@@ -290,7 +324,8 @@ def main():
     )
 
     accelerator.print(
-        f"🚀 Training Safe-Rank-GRPO (lambda={args.lambda_safe}, penalty={args.penalty_safe})..."
+        f"Training Safe-Rank-GRPO [mode={args.advantage_mode}] "
+        f"(lambda={args.lambda_safe}, penalty={args.penalty_safe})..."
     )
     trainer.train(resume_from_checkpoint=args.resume)
     accelerator.print("✅ Done")

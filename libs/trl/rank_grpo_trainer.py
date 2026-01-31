@@ -789,6 +789,9 @@ class RankGRPOTrainer(Trainer):
         self.early_stop_penalty = getattr(args, "early_stop_penalty", -0.1) # - penalty of EOS when less than 20
         self.apply_extra_length_shaping = getattr(args, "apply_extra_length_shaping", True)
 
+        # GDPO: per-reward decoupled normalization mode
+        self.advantage_mode = getattr(args, "advantage_mode", "grpo")  # "grpo" or "gdpo"
+
         # Reference model
         self.beta = args.beta
         if self.beta == 0.0:
@@ -1786,27 +1789,56 @@ class RankGRPOTrainer(Trainer):
         rewards_per_func = self._calculate_rewards(inputs, original_prompts, completions, completion_ids_list)  # (N_total, num_funcs, rec_num or 1)
         device = self.accelerator.device
 
-        # Weighted sum across functions -> per-item rewards (N_total, rec_num)
-        weights = self.reward_weights.to(device).view(1, -1, 1)
-        rewards_items = (rewards_per_func * weights).nansum(dim=1)  # (N_total, rec_num)
-
-        # If reward is scalar (rec_num==1), treat as per-seq and broadcast to 1 position
-        if rewards_items.ndim != 2:
-            rewards_items = rewards_items.unsqueeze(1)
-
-        # Compute group-wise mean/std over num_generations, per position
         G = self.num_generations
-        Bglob = rewards_items.size(0) // G
-        rec_num = self.rec_num if getattr(self, 'rec_num', None) is not None else rewards_items.size(1)
-        group_means_items = rewards_items.view(Bglob, G, rec_num).mean(dim=1)  # (Bglob, rec_num)
-        group_stds_items  = rewards_items.view(Bglob, G, rec_num).std(dim=1)   # (Bglob, rec_num)
+        rec_num = self.rec_num if getattr(self, 'rec_num', None) is not None else rewards_per_func.size(2)
 
-        # Normalize to get per-item advantages (flatten back to N_total, rec_num)
-        mean_rep = group_means_items.repeat_interleave(G, dim=0)               # (N_total, rec_num)
-        std_rep  = group_stds_items.repeat_interleave(G, dim=0)                # (N_total, rec_num)
-        advantages_items = rewards_items - mean_rep
-        if self.scale_rewards:
-            advantages_items = advantages_items / (std_rep + 1e-4)             # (N_total, rec_num)
+        if self.advantage_mode == "gdpo" and rewards_per_func.size(1) > 1:
+            # === GDPO: per-reward decoupled normalization ===
+            # Each reward signal is independently group-normalized before weighted combination.
+            Bglob = rewards_per_func.size(0) // G
+            num_funcs = rewards_per_func.size(1)
+
+            all_advantages = []
+            for i in range(num_funcs):
+                reward_i = rewards_per_func[:, i, :]  # (N_total, rec_num)
+                group_mean_i = reward_i.view(Bglob, G, rec_num).mean(dim=1)
+                group_std_i  = reward_i.view(Bglob, G, rec_num).std(dim=1)
+                mean_rep_i = group_mean_i.repeat_interleave(G, dim=0)
+                std_rep_i  = group_std_i.repeat_interleave(G, dim=0)
+                adv_i = (reward_i - mean_rep_i) / (std_rep_i + 1e-4)
+                all_advantages.append(adv_i)
+
+            stacked = torch.stack(all_advantages, dim=1)  # (N_total, num_funcs, rec_num)
+            weights = self.reward_weights.to(device).view(1, -1, 1)
+            advantages_items = (stacked * weights).nansum(dim=1)  # (N_total, rec_num)
+
+            # Final batch normalization
+            bn_mean = advantages_items.mean()
+            bn_std  = advantages_items.std()
+            advantages_items = (advantages_items - bn_mean) / (bn_std + 1e-4)
+
+            # Compute rewards_items and group stats for logging
+            rewards_items = (rewards_per_func * weights).nansum(dim=1)
+            group_means_items = rewards_items.view(Bglob, G, rec_num).mean(dim=1)
+            group_stds_items  = rewards_items.view(Bglob, G, rec_num).std(dim=1)
+        else:
+            # === Original GRPO: weighted sum then group normalize ===
+            weights = self.reward_weights.to(device).view(1, -1, 1)
+            rewards_items = (rewards_per_func * weights).nansum(dim=1)  # (N_total, rec_num)
+
+            # If reward is scalar (rec_num==1), treat as per-seq and broadcast to 1 position
+            if rewards_items.ndim != 2:
+                rewards_items = rewards_items.unsqueeze(1)
+
+            Bglob = rewards_items.size(0) // G
+            group_means_items = rewards_items.view(Bglob, G, rec_num).mean(dim=1)  # (Bglob, rec_num)
+            group_stds_items  = rewards_items.view(Bglob, G, rec_num).std(dim=1)   # (Bglob, rec_num)
+
+            mean_rep = group_means_items.repeat_interleave(G, dim=0)               # (N_total, rec_num)
+            std_rep  = group_stds_items.repeat_interleave(G, dim=0)                # (N_total, rec_num)
+            advantages_items = rewards_items - mean_rep
+            if self.scale_rewards:
+                advantages_items = advantages_items / (std_rep + 1e-4)             # (N_total, rec_num)
 
         # Slice to local process
         process_slice = slice(
