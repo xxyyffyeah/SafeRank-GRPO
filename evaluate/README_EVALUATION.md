@@ -194,6 +194,54 @@ python3 eval_sft_val_safe.py ... --upload_wandb
 
 **Requirements**: W&B account and login (`wandb login`)
 
+### Evaluating GRPO / Safe-GRPO Models (Full Checkpoints)
+
+```bash
+cd evaluate
+python3 eval_sft_val_safe.py \
+    --model_name "Qwen/Qwen2.5-0.5B-Instruct" \
+    --model_root "../results/grpo/Qwen/Qwen2.5-0.5B-Instruct_lr1e-06_kl0.001_mu1" \
+    --dataset_path "../downloaded_datasets/processed_datasets/saferec_sft_dataset" \
+    --catalog_path "../gt_catalog_complete.pkl" \
+    --trait_sensitivity_path "../downloaded_datasets/movie_trait_sensitivity.json" \
+    --title_mapping_path "../data/phase1_mapping/title_to_imdb.pkl" \
+    --output_dir "figs_saferec" \
+    --baseline_model "../results/Qwen/Qwen2.5-0.5B-Instruct/checkpoint-800"
+```
+
+**`--baseline_model`**: checkpoint-0 使用该模型作为 baseline（而非 base model），通常设为 SFT checkpoint 路径。
+
+### Evaluating LoRA Models (GDPO + LoRA)
+
+LoRA checkpoint 只包含 adapter 权重，需要指定 base model 来加载：
+
+```bash
+cd evaluate
+python3 eval_sft_val_safe.py \
+    --model_name "Qwen/Qwen2.5-0.5B-Instruct" \
+    --model_root "../results/safe_grpo/Qwen/Qwen2.5-0.5B-Instruct_gdpo_lora_r64_lr1e-06_kl0.001_mu1_lambda1.0_penalty1.0" \
+    --dataset_path "../downloaded_datasets/processed_datasets/saferec_sft_dataset" \
+    --catalog_path "../gt_catalog_complete.pkl" \
+    --trait_sensitivity_path "../downloaded_datasets/movie_trait_sensitivity.json" \
+    --title_mapping_path "../data/phase1_mapping/title_to_imdb.pkl" \
+    --output_dir "figs_saferec" \
+    --baseline_model "../results/Qwen/Qwen2.5-0.5B-Instruct/checkpoint-800" \
+    --use_lora \
+    --lora_base_model "../results/Qwen/Qwen2.5-0.5B-Instruct/checkpoint-800"
+```
+
+**LoRA 专用参数**：
+
+| 参数 | 说明 |
+|------|------|
+| `--use_lora` | 标记 checkpoint 为 LoRA adapter |
+| `--lora_base_model` | LoRA 的 base model 路径（必需），通常与 `--baseline_model` 一致 |
+
+**工作原理**：
+- checkpoint-0：加载 `--baseline_model`（SFT checkpoint）
+- 其他 step：用 vLLM 的 `enable_lora=True` 加载 base model + LoRA adapter
+- 不存在或不完整的 checkpoint 会自动跳过（同时检查 `config.json` 和 `adapter_config.json`）
+
 ---
 
 ## Evaluating Baseline Models
@@ -358,6 +406,25 @@ For **production deployment**, monitor:
 ---
 
 ## Advanced Usage
+
+### Complete CLI Reference
+
+| 参数 | 默认值 | 说明 |
+|------|--------|------|
+| `--model_name` | `Qwen/Qwen2.5-0.5B-Instruct` | 模型名称（HuggingFace ID） |
+| `--model_root` | `../results/Qwen/Qwen2.5-0.5B-Instruct` | checkpoint 所在目录 |
+| `--dataset_path` | `../processed_datasets/sft_dataset` | 数据集路径 |
+| `--catalog_path` | `../gt_catalog.pkl` | GT catalog 文件 |
+| `--trait_sensitivity_path` | `../downloaded_datasets/movie_trait_sensitivity.json` | 电影安全特征数据 |
+| `--title_mapping_path` | `../data/phase1_mapping/title_to_imdb.pkl` | Title→IMDb 映射 |
+| `--output_dir` | `figs` | 图表输出目录 |
+| `--split` | `test` | 评估数据集分割：train/validation/test |
+| `--eval_last_only` | - | 仅评估最新 checkpoint |
+| `--baseline_model` | None | checkpoint-0 baseline 模型路径（默认用 `--model_name`） |
+| `--use_lora` | - | checkpoint 为 LoRA adapter |
+| `--lora_base_model` | None | LoRA base model 路径（`--use_lora` 时必需） |
+| `--upload_wandb` | - | 上传结果到 Weights & Biases |
+| `--wandb_project` | `sft_eval_val` | W&B 项目名 |
 
 ### Custom Metrics Computation
 
@@ -538,4 +605,4 @@ For questions or issues:
 
 ---
 
-**Last Updated**: 2026-01-26
+**Last Updated**: 2026-01-31

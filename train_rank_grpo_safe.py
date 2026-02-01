@@ -114,6 +114,9 @@ def parse_args():
         "--num_train_epochs", type=int, default=2, help="Number of training epochs."
     )
     sched.add_argument(
+        "--max_steps", type=int, default=-1, help="Max training steps (-1 = use num_train_epochs)."
+    )
+    sched.add_argument(
         "--mu",
         type=int,
         default=1,
@@ -313,6 +316,7 @@ def main():
         per_device_train_batch_size=args.per_device_train_batch_size,
         per_device_eval_batch_size=args.per_device_eval_batch_size,
         num_train_epochs=args.num_train_epochs,
+        max_steps=args.max_steps,
         num_iterations=args.mu,
         save_strategy=args.save_strategy,
         save_steps=args.save_steps,
@@ -331,6 +335,7 @@ def main():
         max_completion_length=args.max_completion_length,
         num_generations=args.num_generations,
         gradient_checkpointing=args.gradient_checkpointing,
+        gradient_checkpointing_kwargs={"use_reentrant": False} if args.gradient_checkpointing else None,
         run_name=run_name,
     )
 

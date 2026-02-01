@@ -1,13 +1,40 @@
 cd evaluate
 python3 eval_sft_val_safe.py \
     --model_name "Qwen/Qwen2.5-0.5B-Instruct" \
-    --model_root "../results/grpo/Qwen/Qwen2.5-0.5B-Instruct_lr1e-06_kl0.001_mu1" \
+    --model_root "../results/grpo/Qwen/Qwen2.5-0.5B-Instruct_lr1e-06_kl0.001" \
     --dataset_path "../downloaded_datasets/processed_datasets/saferec_sft_dataset" \
     --catalog_path "../gt_catalog_complete.pkl" \
     --trait_sensitivity_path "../downloaded_datasets/movie_trait_sensitivity.json" \
     --title_mapping_path "../data/phase1_mapping/title_to_imdb.pkl" \
     --output_dir "figs_saferec" \
     --baseline_model "../results/Qwen/Qwen2.5-0.5B-Instruct/checkpoint-800" 
+
+
+PYTHONPATH="/home/jovyan/Rank-GRPO/libs:$PYTHONPATH" python eval_grpo_test.py \
+    --model_name "Qwen/Qwen2.5-0.5B-Instruct" \
+    --model_root "/home/jovyan/Rank-GRPO/results/official_sft/Qwen2.5-0.5B-Instruct" \
+    --dataset_path "/home/jovyan/Rank-GRPO/downloaded_datasets/processed_datasets/sft_dataset" \
+    --catalog_path "/home/jovyan/Rank-GRPO/gt_catalog_complete.pkl" \
+    --save_dir "/home/jovyan/Rank-GRPO/results/grpo/Qwen/Qwen2.5-0.5B-Instruct_lr1e-06_kl0.001_mu1" \
+    --gpu_memory_utilization 0.8 \
+    --tensor_parallel_size 1 \
+
+
+cd evaluate
+python3 eval_sft_val_safe.py \
+    --model_name "Qwen/Qwen2.5-0.5B-Instruct" \
+    --model_root "../results/safe_grpo/Qwen/Qwen2.5-0.5B-Instruct_gdpo_lora_r256_lr1e-06_kl0.001_mu1_lambda1.0_penalty1.0" \
+    --dataset_path "../downloaded_datasets/processed_datasets/saferec_sft_dataset" \
+    --catalog_path "../gt_catalog_complete.pkl" \
+    --trait_sensitivity_path "../downloaded_datasets/movie_trait_sensitivity.json" \
+    --title_mapping_path "../data/phase1_mapping/title_to_imdb.pkl" \
+    --output_dir "figs_saferec" \
+    --baseline_model "../results/Qwen/Qwen2.5-0.5B-Instruct/checkpoint-800" \
+    --use_lora \
+    --lora_base_model "../results/Qwen/Qwen2.5-0.5B-Instruct/checkpoint-800"
+官方GRPO checkpoint eval_sft_val_safe.py on test set:
+cd evaluate
+python3 eval_sft_val_safe.py --model_name "Qwen/Qwen2.5-0.5B-Instruct" --model_root "../results/grpo/Qwen/Qwen2.5-0.5B-Instruct_lr1e-06_kl0.001" --dataset_path "../downloaded_datasets/processed_datasets/saferec_sft_dataset" --catalog_path "../gt_catalog_complete.pkl" --trait_sensitivity_path "../downloaded_datasets/movie_trait_sensitivity.json" --title_mapping_path "../data/phase1_mapping/title_to_imdb.pkl" --output_dir "figs_saferec" --baseline_model "../results/Qwen/Qwen2.5-0.5B-Instruct/checkpoint-800" --eval_last_only
 
   命令 1：Safe Rank-GRPO（~1004 steps）                                                                                                            
                                                                                                                                                    

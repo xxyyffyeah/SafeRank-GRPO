@@ -255,43 +255,43 @@ accelerate launch --num_processes 2 train_rank_grpo_safe.py \
     --penalty_safe 1.0
 ```
 
-### LoRA 训练（低显存 / 单卡友好）
+### LoRA + GDPO 双卡训练
 
-LoRA 训练大幅降低显存占用（无需加载 reference model 副本），checkpoint 也更小，适合单卡运行：
+LoRA 训练大幅降低显存占用（无需加载 reference model 副本），checkpoint 也更小。配合双卡 accelerate 和 GDPO 解耦归一化：
 
 ```bash
-CUDA_VISIBLE_DEVICES=2 PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True \
-python -u train_rank_grpo_safe.py \
+accelerate launch --num_processes 2 train_rank_grpo_safe.py \
     --train_path ./downloaded_datasets/processed_datasets/saferec_sft_dataset \
     --model_name Qwen/Qwen2.5-0.5B-Instruct \
     --sft_checkpoint 800 \
     --catalog_path gt_catalog_complete.pkl \
     --use_lora \
-    --lora_r 64 \
-    --lora_alpha 128 \
+    --lora_r 256 \
+    --lora_alpha 512 \
     --lora_dropout 0.05 \
     --advantage_mode gdpo \
     --reward_func exp_inf \
     --lr 1e-6 \
     --kl_beta 1e-3 \
-    --gradient_accumulation_steps 48 \
-    --per_device_train_batch_size 2 \
-    --num_generations 8 \
+    --gradient_accumulation_steps 24 \
+    --per_device_train_batch_size 1 \
+    --per_device_eval_batch_size 1 \
+    --num_generations 4 \
+    --max_steps 1000 \
     --use_vllm \
     --vllm_mode colocate \
-    --vllm_gpu_memory_utilization 0.4 \
+    --vllm_gpu_memory_utilization 0.35 \
     --vllm_tensor_parallel_size 1 \
-    --save_steps 500 \
+    --save_strategy steps \
+    --save_steps 100 \
+    --logging_steps 10 \
     --seed 3407 \
     --bf16 \
     --gradient_checkpointing \
     --lambda_safe 1.0 \
     --penalty_safe 1.0
-```
 
-> **显存参考**：0.5B 模型 + LoRA r=64，单卡 46 GiB (L40) 实测占用约 23 GiB，`vllm_gpu_memory_utilization=0.4` 可正常运行。
-
-> **LoRA rank 选择建议**：计算资源充足时推荐 `r=64, alpha=128`（alpha/r=2）。多信号学习（relevance + safety）和结构化输出（20-item 推荐列表）比一般文本任务需要更高 rank。
+> **LoRA rank 选择建议**：`r=256, alpha=512`（alpha/r=2）。多信号学习（relevance + safety）和结构化输出（20-item 推荐列表）需要较高 rank 以获得足够的表达能力。
 
 ### 调整惩罚强度
 

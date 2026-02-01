@@ -9,6 +9,7 @@ from collections import defaultdict
 import matplotlib.pyplot as plt
 
 from vllm import LLM, SamplingParams
+from vllm.lora.request import LoRARequest
 from datasets import load_from_disk
 
 # Local libs
@@ -94,6 +95,10 @@ def parse_args():
                         help="Model path for checkpoint-0 baseline. Defaults to --model_name (base model). "
                              "Set to an SFT checkpoint path (e.g. ../results/.../checkpoint-800) to use "
                              "the actual training starting point as baseline.")
+    parser.add_argument("--use_lora", action="store_true",
+                        help="Checkpoints are LoRA adapters. Requires --lora_base_model.")
+    parser.add_argument("--lora_base_model", default=None,
+                        help="Base model path for LoRA adapter loading (e.g. ../results/.../checkpoint-800).")
     return parser.parse_args()
 
 
@@ -160,26 +165,58 @@ def main():
             valid_step_list.append(step)
         else:
             ckpt_path = model_path_tmpl.format(step)
-            if os.path.isdir(ckpt_path) and os.path.isfile(os.path.join(ckpt_path, "config.json")):
+            has_full = os.path.isfile(os.path.join(ckpt_path, "config.json"))
+            has_lora = os.path.isfile(os.path.join(ckpt_path, "adapter_config.json"))
+            if os.path.isdir(ckpt_path) and (has_full or has_lora):
                 valid_step_list.append(step)
             else:
                 print(f"⚠️  Skipping step {step}: checkpoint not found or incomplete")
     step_list = valid_step_list
     print(f"📌 Valid checkpoints to evaluate: {step_list}")
 
+    # LoRA mode: validate args and set up base model
+    if args.use_lora:
+        if not args.lora_base_model:
+            raise ValueError("--lora_base_model is required when --use_lora is set")
+        print(f"🔧 LoRA mode: base model = {args.lora_base_model}")
+
     for step in step_list:
         if step in llm_outputs:
             continue
         print(f"Processing step {step} ...")
         baseline = args.baseline_model if args.baseline_model else args.model_name
-        model_to_load = baseline if step == 0 else model_path_tmpl.format(step)
-        llm = LLM(model=model_to_load,
-                  tensor_parallel_size=1,
-                  gpu_memory_utilization=0.8,
-                  max_model_len=8192)
         sampling_params = SamplingParams(temperature=0, top_p=0.9, max_tokens=1024)
-        llm_outputs[step] = llm.chat(all_input_texts, sampling_params)
-        del llm
+
+        if step == 0:
+            # Step 0: always load baseline model directly
+            llm = LLM(model=baseline,
+                      tensor_parallel_size=1,
+                      gpu_memory_utilization=0.8,
+                      max_model_len=8192)
+            llm_outputs[step] = llm.chat(all_input_texts, sampling_params)
+            del llm
+        elif args.use_lora:
+            # LoRA checkpoint: load base model with LoRA support
+            lora_path = os.path.abspath(model_path_tmpl.format(step))
+            llm = LLM(model=args.lora_base_model,
+                      tensor_parallel_size=1,
+                      gpu_memory_utilization=0.8,
+                      max_model_len=8192,
+                      enable_lora=True,
+                      max_lora_rank=256)
+            lora_request = LoRARequest("lora_adapter", 1, lora_path)
+            llm_outputs[step] = llm.chat(all_input_texts, sampling_params,
+                                         lora_request=lora_request)
+            del llm
+        else:
+            # Full model checkpoint
+            model_to_load = model_path_tmpl.format(step)
+            llm = LLM(model=model_to_load,
+                      tensor_parallel_size=1,
+                      gpu_memory_utilization=0.8,
+                      max_model_len=8192)
+            llm_outputs[step] = llm.chat(all_input_texts, sampling_params)
+            del llm
 
     # --- Step 5: Assign outputs to dataset ---
     for step in step_list:
@@ -214,7 +251,7 @@ def main():
 
     # --- Step 7: Recall / NDCG evaluation ---
     print("📊 Calculating Recall and NDCG ...")
-    k_list = [5, 10, 15, 20]
+    k_list = [5, 10]
     metrics, avg_metrics = {}, {}
 
     for step in step_list:
@@ -281,10 +318,11 @@ def main():
         sensitivity_ratio_metrics[step] = ratio_dict
 
         # Print average sensitivity for this step
-        avg_dcg = np.mean(dcgs[20])
-        avg_count = np.mean(counts[20])
-        avg_ratio = np.mean(ratio_dict[20])
-        print(f"  Step {step} - Sensitivity DCG@20: {avg_dcg:.4f}, "
+        top_k = k_list[-1]
+        avg_dcg = np.mean(dcgs[top_k])
+        avg_count = np.mean(counts[top_k])
+        avg_ratio = np.mean(ratio_dict[top_k])
+        print(f"  Step {step} - Sensitivity DCG@{top_k}: {avg_dcg:.4f}, "
               f"Count: {avg_count:.2f}, Ratio: {avg_ratio*100:.1f}%")
 
     # --- Step 8: Save results ---
