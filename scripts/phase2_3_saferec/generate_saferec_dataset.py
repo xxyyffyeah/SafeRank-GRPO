@@ -8,10 +8,21 @@ Takes Phase 0 output and generates SafeRec training data with:
 - CoT reasoning generation
 - IMDb ID lookup for safe recommendations
 
-Usage:
+Supports two modes:
+- sft:  processes completions (filter recs, generate CoT, build safe completion)
+- grpo: no completions (inject constraints into prompt, filter GT only)
+
+Usage (SFT):
     python scripts/phase2_3_saferec/generate_saferec_dataset.py \
         --input_path data/phase0_trait_assignment/saferec_sft_8k_dataset.json \
         --output_path data/phase2_3_saferec/saferec_sft_final.json \
+        --injection_rate 1.0
+
+Usage (GRPO):
+    python scripts/phase2_3_saferec/generate_saferec_dataset.py \
+        --mode grpo \
+        --input_path data/phase0_trait_assignment/expanded/grpo_72k_final.json \
+        --output_path data/phase2_3_saferec/saferec_grpo_final.json \
         --injection_rate 1.0
 """
 
@@ -252,9 +263,55 @@ def process_sample(
     return processed
 
 
-def main():
-    parser = argparse.ArgumentParser(description="Generate SafeRec SFT dataset")
+def process_sample_grpo(
+    sample: Dict,
+    batch_injector: BatchConstraintInjector,
+) -> Dict:
+    """
+    Process a single GRPO sample (no completion).
 
+    Only injects constraints into prompt. GT is already filtered in Phase 0.
+
+    Returns sample with:
+    - Injected prompt
+    - Constraints metadata
+    - Original columns preserved (seen_titles, groundtruth_with_release_year, etc.)
+    """
+    processed = sample.copy()
+
+    assigned_trait = sample.get("assigned_trait")
+    prompt_messages = sample.get("prompt", [])
+
+    # Inject constraints into prompt
+    modified_messages, injection_meta = batch_injector.process_sample(
+        prompt_messages,
+        assigned_trait=assigned_trait,
+        force_inject=True,
+    )
+
+    # Build constraints dict
+    injected_traits = injection_meta.get("traits", [])
+    constraints = {t: True for t in injected_traits}
+
+    processed["prompt"] = modified_messages
+    processed["constraints"] = constraints
+    processed["has_constraint_injection"] = injection_meta.get("injected", False)
+    processed["injected_traits"] = injected_traits
+    processed["constraint_text"] = injection_meta.get("constraint_text", "")
+
+    return processed
+
+
+def main():
+    parser = argparse.ArgumentParser(description="Generate SafeRec dataset (SFT or GRPO)")
+
+    parser.add_argument(
+        "--mode",
+        type=str,
+        default="sft",
+        choices=["sft", "grpo"],
+        help="Dataset mode: sft (with completion processing) or grpo (prompt injection only)"
+    )
     parser.add_argument(
         "--input_path",
         type=str,
@@ -336,51 +393,63 @@ def main():
         seed=args.seed
     )
 
+    print(f"[SafeRec] Mode: {args.mode}", flush=True)
     print(f"[SafeRec] Processing samples...", flush=True)
     processed_samples = []
     stats = {
         "total_samples": len(samples),
+        "mode": args.mode,
         "samples_with_injection": 0,
-        "samples_with_cot": 0,
-        "total_original_recs": 0,
-        "total_safe_recs": 0,
-        "total_filtered_recs": 0,
         "trait_distribution": {},
     }
+
+    if args.mode == "sft":
+        stats.update({
+            "samples_with_cot": 0,
+            "total_original_recs": 0,
+            "total_safe_recs": 0,
+            "total_filtered_recs": 0,
+        })
 
     for i, sample in enumerate(samples):
         if (i + 1) % 500 == 0:
             print(f"  Processed {i + 1}/{len(samples)}...", flush=True)
 
-        processed = process_sample(
-            sample,
-            batch_injector,
-            oracle,
-            threshold=args.risk_threshold,
-            force_inject=(args.injection_rate >= 1.0),
-            include_cot=not args.no_cot
-        )
+        if args.mode == "grpo":
+            processed = process_sample_grpo(sample, batch_injector)
+        else:
+            processed = process_sample(
+                sample,
+                batch_injector,
+                oracle,
+                threshold=args.risk_threshold,
+                force_inject=(args.injection_rate >= 1.0),
+                include_cot=not args.no_cot
+            )
+
         processed_samples.append(processed)
 
         # Update stats
         if processed.get("has_constraint_injection"):
             stats["samples_with_injection"] += 1
-        if processed.get("has_cot"):
-            stats["samples_with_cot"] += 1
 
-        stats["total_original_recs"] += processed.get("original_recommendation_count", 0)
-        stats["total_safe_recs"] += processed.get("safe_recommendation_count", 0)
-        stats["total_filtered_recs"] += processed.get("filtered_recommendation_count", 0)
+        if args.mode == "sft":
+            if processed.get("has_cot"):
+                stats["samples_with_cot"] += 1
+            stats["total_original_recs"] += processed.get("original_recommendation_count", 0)
+            stats["total_safe_recs"] += processed.get("safe_recommendation_count", 0)
+            stats["total_filtered_recs"] += processed.get("filtered_recommendation_count", 0)
 
         for trait in processed.get("injected_traits", []):
             stats["trait_distribution"][trait] = stats["trait_distribution"].get(trait, 0) + 1
 
     # Calculate rates
     stats["injection_rate_actual"] = stats["samples_with_injection"] / len(samples)
-    stats["cot_rate_actual"] = stats["samples_with_cot"] / len(samples)
-    stats["avg_original_recs"] = stats["total_original_recs"] / len(samples)
-    stats["avg_safe_recs"] = stats["total_safe_recs"] / len(samples)
-    stats["avg_filtered_recs"] = stats["total_filtered_recs"] / len(samples)
+    if args.mode == "sft":
+        stats["cot_rate_actual"] = stats["samples_with_cot"] / len(samples)
+        stats["avg_original_recs"] = stats["total_original_recs"] / len(samples)
+        stats["avg_safe_recs"] = stats["total_safe_recs"] / len(samples)
+        stats["avg_filtered_recs"] = stats["total_filtered_recs"] / len(samples)
 
     # Prepare output
     output_data = {
@@ -388,9 +457,10 @@ def main():
             "source": args.input_path,
             "created_utc": datetime.utcnow().isoformat() + "Z",
             "config": {
+                "mode": args.mode,
                 "injection_rate": args.injection_rate,
                 "risk_threshold": args.risk_threshold,
-                "include_cot": not args.no_cot,
+                "include_cot": not args.no_cot if args.mode == "sft" else False,
                 "seed": args.seed,
             },
             "stats": stats,
@@ -404,13 +474,14 @@ def main():
     with open(output_path, 'w', encoding='utf-8') as f:
         json.dump(output_data, f, ensure_ascii=False, indent=2)
 
-    print(f"\n=== Statistics ===")
+    print(f"\n=== Statistics ({args.mode.upper()} mode) ===")
     print(f"Total samples: {stats['total_samples']}")
     print(f"Samples with injection: {stats['samples_with_injection']} ({stats['injection_rate_actual']:.1%})")
-    print(f"Samples with CoT: {stats['samples_with_cot']} ({stats['cot_rate_actual']:.1%})")
-    print(f"Avg original recs: {stats['avg_original_recs']:.1f}")
-    print(f"Avg safe recs: {stats['avg_safe_recs']:.1f}")
-    print(f"Avg filtered recs: {stats['avg_filtered_recs']:.1f}")
+    if args.mode == "sft":
+        print(f"Samples with CoT: {stats['samples_with_cot']} ({stats['cot_rate_actual']:.1%})")
+        print(f"Avg original recs: {stats['avg_original_recs']:.1f}")
+        print(f"Avg safe recs: {stats['avg_safe_recs']:.1f}")
+        print(f"Avg filtered recs: {stats['avg_filtered_recs']:.1f}")
     print(f"\nTrait distribution:")
     for trait, count in sorted(stats["trait_distribution"].items(), key=lambda x: -x[1])[:10]:
         print(f"  {trait}: {count}")

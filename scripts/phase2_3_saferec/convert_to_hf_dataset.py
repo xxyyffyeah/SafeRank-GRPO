@@ -30,26 +30,30 @@ def load_saferec_data(input_path: str) -> list:
 
 def prepare_sample_for_sft(sample: dict) -> dict:
     """
-    Extract SFT training fields from SafeRec sample.
+    Extract training fields from SafeRec sample.
+
+    Works for both SFT (with completion) and GRPO (without completion).
 
     Returns dict with:
     - prompt: list of message dicts
-    - completion: list of message dicts (with safe recommendations + CoT)
+    - completion: list of message dicts (SFT only, omitted for GRPO)
     - seen_titles: list of strings
     - groundtruth_with_release_year: list of [title, year] pairs
     - constraints: dict of trait -> bool (for sensitivity evaluation)
     - assigned_trait: str, the assigned user sensitivity trait
     - assignment_reason: str, the reasoning for why this trait was assigned
     """
-    return {
+    result = {
         "prompt": sample["prompt"],
-        "completion": sample["completion"],
         "seen_titles": sample.get("seen_titles", []),
         "groundtruth_with_release_year": sample.get("groundtruth_with_release_year", []),
         "constraints": sample.get("constraints", {}),
         "assigned_trait": sample.get("assigned_trait", ""),
         "assignment_reason": sample.get("assignment_reason", ""),
     }
+    if "completion" in sample:
+        result["completion"] = sample["completion"]
+    return result
 
 
 def main():

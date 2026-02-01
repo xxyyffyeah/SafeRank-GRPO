@@ -94,7 +94,7 @@ process_dataset() {
 
     # Step 2: Assign traits via GPT
     echo "Step 2: Assigning traits via ChatGPT API..."
-    echo "   Model: gpt-4o"
+    echo "   Model: gpt-5.2"
     echo "   Output: $TRAITS_FILE"
     echo ""
 
@@ -102,7 +102,7 @@ process_dataset() {
         --input_path "$FILTERED_FILE" \
         --output_path "$TRAITS_FILE" \
         --traits_path "$TRAITS_PATH" \
-        --model gpt-4o \
+        --model gpt-5.2 \
         --temperature 0.3 \
         $MAX_SAMPLES
 
