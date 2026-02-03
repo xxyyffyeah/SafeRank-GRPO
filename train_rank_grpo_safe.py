@@ -13,6 +13,7 @@ from libs.safe_reward_funcs import (
     make_relevance_func_individual,
     make_safety_func,
     make_safety_func_individual,
+    make_count_func,
 )
 from libs.safety_oracle import create_oracle
 from libs.logs import setup_environment, setup_wandb
@@ -76,6 +77,18 @@ def parse_args():
         type=float,
         default=0.66,
         help="Risk threshold for SafetyOracle (movies with risk >= threshold are unsafe).",
+    )
+    safety.add_argument(
+        "--lambda_count",
+        type=float,
+        default=0.0,
+        help="Count reward weight. When > 0, adds a reward signal encouraging exactly --target_count recs.",
+    )
+    safety.add_argument(
+        "--target_count",
+        type=int,
+        default=10,
+        help="Target number of recommendations for the count reward.",
     )
 
     opt = parser.add_argument_group("Optimization hyperparameters")
@@ -261,6 +274,14 @@ def main():
         else:
             raise ValueError(f"{args.reward_func} not implemented!")
         reward_func = [relevance_func, safety_func]
+        if args.lambda_count > 0:
+            count_func = make_count_func(
+                rec_num=20, target_count=args.target_count, lambda_count=args.lambda_count,
+            )
+            reward_func.append(count_func)
+            accelerator.print(
+                f"[GDPO] Count reward enabled: target={args.target_count}, lambda={args.lambda_count}"
+            )
     else:
         # GRPO: single combined reward function
         if args.reward_func == "exp_inf":

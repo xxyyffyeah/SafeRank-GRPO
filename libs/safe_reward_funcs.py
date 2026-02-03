@@ -500,3 +500,84 @@ def make_safety_func_individual(
             lambda_safe=lambda_safe, penalty_safe=penalty_safe, **kwargs,
         )
     return wrapped
+
+
+# ---------------------------------------------------------------------------
+# Count reward: encourages the model to output exactly `target_count` recs
+# ---------------------------------------------------------------------------
+
+def count_reward_func(
+    completions: List[List[Dict[str, str]]],
+    groundtruth_with_release_year: List[List[Tuple[str, int]]],
+    seen_titles: List[List[str]],
+    rec_num: int,
+    target_count: int = 10,
+    lambda_count: float = 1.0,
+    **kwargs,
+) -> List[List[float]]:
+    """
+    Per-rank count reward that encourages exactly `target_count` recommendations.
+
+    Reward scheme (broadcast uniformly across all rec_num ranks):
+        - If parsed rec count == target_count: reward = +lambda_count
+        - If parsed rec count < target_count:  reward = -lambda_count * (target_count - count) / target_count
+        - If parsed rec count > target_count:  reward = -lambda_count * (count - target_count) / target_count
+
+    The uniform broadcast ensures the signal is shared across all generated ranks,
+    so the model learns that the total output length matters.
+    """
+    rec_num = int(rec_num)
+    batch_rewards = []
+
+    for recs, gt_with_year, seen in zip(
+        completions, groundtruth_with_release_year, seen_titles
+    ):
+        recs_text = recs[0]["content"]
+        item = {
+            "raw_recs": recs_text,
+            "groundtruth_with_release_year": gt_with_year,
+            "seen_titles": seen,
+        }
+
+        error, item = process_rec_raw(item, "raw_recs", "recs")
+        if error:
+            # No parseable output → maximum penalty
+            penalty = -lambda_count
+            batch_rewards.append([penalty] * rec_num)
+            continue
+
+        parsed_count = len(item.get("recs", []))
+
+        if parsed_count == target_count:
+            reward = lambda_count
+        else:
+            deviation = abs(parsed_count - target_count) / target_count
+            reward = -lambda_count * deviation
+
+        batch_rewards.append([reward] * rec_num)
+
+    return batch_rewards
+
+
+def make_count_func(
+    rec_num: int,
+    target_count: int = 10,
+    lambda_count: float = 1.0,
+) -> callable:
+    """Factory: count reward function for GDPO."""
+
+    def wrapped(
+        completions, groundtruth_with_release_year, seen_titles, **kwargs,
+    ) -> List[List[float]]:
+        kwargs.pop("constraints", None)
+        return count_reward_func(
+            completions=completions,
+            groundtruth_with_release_year=groundtruth_with_release_year,
+            seen_titles=seen_titles,
+            rec_num=rec_num,
+            target_count=target_count,
+            lambda_count=lambda_count,
+            **kwargs,
+        )
+
+    return wrapped
