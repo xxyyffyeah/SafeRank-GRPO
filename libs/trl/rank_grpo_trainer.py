@@ -1438,6 +1438,14 @@ class RankGRPOTrainer(Trainer):
 
         # Align widths across functions
         max_rec_num = max(t.size(1) for t in per_func_outputs)
+
+        # Synchronize max_rec_num across all ranks to ensure uniform tensor shape for gather
+        import torch.distributed as dist
+        if dist.is_initialized():
+            max_rec_num_tensor = torch.tensor([max_rec_num], device=device, dtype=torch.long)
+            dist.all_reduce(max_rec_num_tensor, op=dist.ReduceOp.MAX)
+            max_rec_num = max_rec_num_tensor.item()
+
         per_func_outputs = [
             t if t.size(1) == max_rec_num else F.pad(t, (0, max_rec_num - t.size(1)), value=float("nan"))
             for t in per_func_outputs
@@ -1923,6 +1931,11 @@ class RankGRPOTrainer(Trainer):
         self._metrics[mode]["frac_reward_zero_std"].append(is_std_zero.float().mean().item())
 
         # ---- Per-function reward logging (GDPO) ----
+        # DEBUG: Check rewards_per_func shape and reward_func_names
+        if self.accelerator.is_main_process:
+            print(f"[DEBUG] rewards_per_func.shape: {rewards_per_func.shape}, "
+                  f"size(1)={rewards_per_func.size(1)}, "
+                  f"reward_func_names: {getattr(self, 'reward_func_names', None)}")
         if rewards_per_func.size(1) > 1 and hasattr(self, "reward_func_names"):
             num_funcs = rewards_per_func.size(1)
             for i in range(num_funcs):

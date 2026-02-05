@@ -4,6 +4,7 @@ import argparse
 from datasets import load_from_disk
 from accelerate import Accelerator
 from trl import SFTConfig, SFTTrainer
+from peft import LoraConfig
 
 sys.path.append("libs")
 from utils import process_rec_raw
@@ -54,6 +55,18 @@ def parse_args():
     log.add_argument("--eval_steps", type=int, default=10, help="Number of steps between evaluations.")
     log.add_argument("--resume", action="store_true", help="Resume training from the latest checkpoint if available.")
 
+    lora = parser.add_argument_group("LoRA / PEFT parameters")
+    lora.add_argument("--use_lora", action="store_true", help="Enable LoRA (Low-Rank Adaptation) training.")
+    lora.add_argument("--lora_r", type=int, default=16, help="LoRA rank.")
+    lora.add_argument("--lora_alpha", type=int, default=32, help="LoRA scaling factor.")
+    lora.add_argument("--lora_dropout", type=float, default=0.05, help="Dropout probability for LoRA layers.")
+    lora.add_argument(
+        "--lora_target_modules",
+        nargs="+",
+        default=["q_proj", "v_proj", "k_proj", "o_proj", "gate_proj", "up_proj", "down_proj"],
+        help="Module names to apply LoRA to.",
+    )
+
     misc = parser.add_argument_group("Miscellaneous")
     misc.add_argument("--seed", type=int, default=3407, help="Random seed for reproducibility.")
     misc.add_argument("--bf16", action="store_true", help="Enable bfloat16 precision training.")
@@ -68,9 +81,24 @@ def main():
     os.environ["WANDB_PROJECT"] = "sft-rec-uva"
 
     # Load datasets
-    accelerator.print(f"📚 Loading datasets from {args.dataset_path}")
+    accelerator.print(f"Loading datasets from {args.dataset_path}")
     train_dataset = load_from_disk(os.path.join(args.dataset_path, "train"))
     val_dataset = load_from_disk(os.path.join(args.dataset_path, "validation"))
+
+    # Build LoRA config if enabled
+    peft_config = None
+    if args.use_lora:
+        peft_config = LoraConfig(
+            r=args.lora_r,
+            lora_alpha=args.lora_alpha,
+            lora_dropout=args.lora_dropout,
+            target_modules=args.lora_target_modules,
+            task_type="CAUSAL_LM",
+        )
+        accelerator.print(
+            f"[LoRA] Enabled: r={args.lora_r}, alpha={args.lora_alpha}, "
+            f"dropout={args.lora_dropout}, targets={args.lora_target_modules}"
+        )
 
     # SFT configuration
     config = SFTConfig(
@@ -93,6 +121,7 @@ def main():
         dataset_num_proc=args.dataset_num_proc,
         max_length=args.max_length,
         gradient_checkpointing=args.gradient_checkpointing,
+        report_to="wandb",
     )
 
     # Trainer
@@ -101,11 +130,12 @@ def main():
         args=config,
         train_dataset=train_dataset,
         eval_dataset=val_dataset,
+        peft_config=peft_config,
     )
 
-    accelerator.print("🚀 Training …")
+    accelerator.print("Training ...")
     trainer.train(resume_from_checkpoint=args.resume)
-    accelerator.print("✅ Done")
+    accelerator.print("Done")
 
 
 if __name__ == "__main__":
