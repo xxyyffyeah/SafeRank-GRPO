@@ -566,6 +566,7 @@ def make_count_func(
 ) -> callable:
     """Factory: count reward function for GDPO."""
 
+    @wraps(count_reward_func)
     def wrapped(
         completions, groundtruth_with_release_year, seen_titles, **kwargs,
     ) -> List[List[float]]:

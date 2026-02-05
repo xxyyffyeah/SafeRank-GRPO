@@ -6,3 +6,6 @@ logs/
 *.pyc
 results/
 wandb/
+*.log
+/temp.txt
+test.py

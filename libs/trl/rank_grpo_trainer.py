@@ -1922,6 +1922,19 @@ class RankGRPOTrainer(Trainer):
         self._metrics[mode]["reward_std"].append(group_stds_items.mean().item())
         self._metrics[mode]["frac_reward_zero_std"].append(is_std_zero.float().mean().item())
 
+        # ---- Per-function reward logging (GDPO) ----
+        if rewards_per_func.size(1) > 1 and hasattr(self, "reward_func_names"):
+            num_funcs = rewards_per_func.size(1)
+            for i in range(num_funcs):
+                fname = self.reward_func_names[i] if i < len(self.reward_func_names) else f"func_{i}"
+                reward_i = rewards_per_func[:, i, :]  # (N_total, rec_num)
+                func_mean = reward_i.nanmean().item()
+                func_std = reward_i.std().item() if reward_i.numel() > 1 else 0.0
+                nonzero_frac = (reward_i.abs() > 1e-8).float().mean().item()
+                self._metrics[mode][f"reward_func/{fname}/mean"].append(func_mean)
+                self._metrics[mode][f"reward_func/{fname}/std"].append(func_std)
+                self._metrics[mode][f"reward_func/{fname}/nonzero_frac"].append(nonzero_frac)
+
         # Log prompt/completion texts and a seq-level sum for visibility
         self._logs["prompt"].extend(gather_object(prompts_text))
         self._logs["completion"].extend(gather_object(completions_text))

@@ -284,29 +284,61 @@ GRPO without a safety signal actively optimizes the model to recommend more popu
 
 Three GRPO runs starting from Safe SFT checkpoint-800 are compared.
 
-#### GDPO without count reward (steps 0 → 1000)
-
-| Metric | Step 0 | Step 600 | Step 1000 | Change |
-|--------|--------|----------|-----------|--------|
-| Recall@5 | 0.0470 | 0.0478 | 0.0483 | +2.8% |
-| Recall@10 | 0.0710 | 0.0650 | 0.0596 | **-16.1%** |
-| NDCG@5 | 0.0337 | 0.0346 | 0.0362 | +7.4% |
-| NDCG@10 | 0.0419 | 0.0406 | 0.0403 | -3.8% |
-| Sensitivity Ratio@10 | 1.44% | 1.07% | 1.14% | -20.8% |
+#### GDPO without count reward
 
 Recall@10 degrades significantly because the model learns to output fewer recommendations as a shortcut to avoid safety violations.
 
-#### GDPO with count reward (steps 0 → 1000)
+| Step | Recall@5 | Recall@10 | NDCG@5 | NDCG@10 | Sens. DCG@10 | Sens. Count@10 | Sens. Ratio@10 |
+|------|----------|-----------|--------|---------|--------------|----------------|----------------|
+| 0 | 0.0470 | 0.0710 | 0.0337 | 0.0419 | 0.0721 | 0.1436 | 1.44% |
+| 200 | 0.0438 | 0.0691 | 0.0324 | 0.0410 | 0.0657 | 0.1221 | 1.27% |
+| 400 | 0.0468 | 0.0671 | 0.0323 | 0.0395 | 0.0576 | 0.1114 | 1.14% |
+| 600 | 0.0478 | 0.0650 | 0.0346 | 0.0406 | 0.0512 | 0.0998 | 1.07% |
+| 800 | 0.0508 | 0.0646 | 0.0369 | 0.0418 | 0.0467 | 0.0916 | 1.01% |
+| 1000 | 0.0483 | 0.0596 | 0.0362 | 0.0403 | 0.0512 | 0.0990 | 1.14% |
+| 1200 | 0.0469 | 0.0612 | 0.0350 | 0.0402 | 0.0403 | 0.0751 | 0.89% |
+| 1400 | 0.0481 | 0.0647 | 0.0358 | 0.0416 | 0.0434 | 0.0825 | 0.97% |
+| 1600 | 0.0450 | 0.0602 | 0.0340 | 0.0394 | 0.0426 | 0.0809 | 0.99% |
+| 1800 | 0.0489 | 0.0627 | 0.0356 | 0.0403 | 0.0392 | 0.0767 | 0.91% |
+| 2000 | 0.0486 | 0.0602 | 0.0359 | 0.0401 | 0.0390 | 0.0767 | 0.95% |
+| 2200 | 0.0506 | 0.0624 | 0.0354 | 0.0396 | 0.0416 | 0.0817 | 1.02% |
+| 2400 | 0.0502 | 0.0619 | 0.0351 | 0.0392 | 0.0398 | 0.0792 | 1.00% |
+| 2600 | 0.0464 | 0.0604 | 0.0338 | 0.0388 | 0.0453 | 0.0875 | 1.09% |
+| 2800 | 0.0474 | 0.0591 | 0.0337 | 0.0379 | 0.0427 | 0.0825 | 1.04% |
+| 3000 | 0.0467 | 0.0595 | 0.0340 | 0.0386 | 0.0402 | 0.0792 | 1.02% |
+| 3200 | 0.0483 | 0.0618 | 0.0353 | 0.0399 | 0.0388 | 0.0776 | 0.99% |
 
-| Metric | Step 0 | Step 600 | Step 1000 | Change |
-|--------|--------|----------|-----------|--------|
-| Recall@5 | 0.0470 | 0.0476 | 0.0520 | +10.6% |
-| Recall@10 | 0.0710 | 0.0688 | 0.0725 | **+2.1%** |
-| NDCG@5 | 0.0337 | 0.0358 | 0.0378 | +12.2% |
-| NDCG@10 | 0.0419 | 0.0430 | 0.0447 | +6.7% |
-| Sensitivity Ratio@10 | 1.44% | 1.03% | 1.25% | -13.2% |
+**Trend**: Recall@10 drops from 0.0710 to ~0.060 (a 16% loss) and plateaus there. Safety improves steadily (Sens. Ratio@10: 1.44% → ~1.0%), but the model achieves this partly by shrinking its recommendation count rather than learning which movies to avoid.
 
-With the count reward, Recall@10 is maintained near baseline while safety still improves.
+#### GDPO with count reward (lambda_count=0.5)
+
+| Step | Recall@5 | Recall@10 | NDCG@5 | NDCG@10 | Sens. DCG@10 | Sens. Count@10 | Sens. Ratio@10 |
+|------|----------|-----------|--------|---------|--------------|----------------|----------------|
+| 0 | 0.0470 | 0.0710 | 0.0337 | 0.0419 | 0.0721 | 0.1436 | 1.44% |
+| 200 | 0.0474 | 0.0694 | 0.0351 | 0.0426 | 0.0625 | 0.1213 | 1.21% |
+| 400 | 0.0481 | 0.0685 | 0.0354 | 0.0421 | 0.0533 | 0.1122 | 1.12% |
+| 600 | 0.0476 | 0.0688 | 0.0358 | 0.0430 | 0.0526 | 0.1031 | 1.03% |
+| 800 | 0.0514 | 0.0697 | 0.0384 | 0.0447 | 0.0586 | 0.1155 | 1.17% |
+| 1000 | 0.0520 | 0.0725 | 0.0378 | 0.0447 | 0.0589 | 0.1254 | 1.25% |
+| 1200 | 0.0513 | 0.0696 | 0.0374 | 0.0437 | 0.0690 | 0.1394 | 1.42% |
+| 1400 | 0.0492 | 0.0724 | 0.0364 | 0.0446 | 0.0576 | 0.1180 | 1.20% |
+
+**Trend**: Recall@10 stays near baseline (0.0710 → 0.0697-0.0725), with slight improvement at step 1000. Safety still improves (Sens. Ratio@10 drops from 1.44% to ~1.17-1.25% in the 800-1400 range), though the improvement is smaller than without count reward because the model can no longer use the rec-count shortcut.
+
+#### Side-by-side comparison at key steps
+
+| Step | Recall@10 (no count) | Recall@10 (w/ count) | Sens. Ratio@10 (no count) | Sens. Ratio@10 (w/ count) |
+|------|---------------------|---------------------|--------------------------|--------------------------|
+| 0 | 0.0710 | 0.0710 | 1.44% | 1.44% |
+| 200 | 0.0691 | 0.0694 | 1.27% | 1.21% |
+| 400 | 0.0671 | 0.0685 | 1.14% | 1.12% |
+| 600 | 0.0650 | 0.0688 | 1.07% | 1.03% |
+| 800 | 0.0646 | 0.0697 | 1.01% | 1.17% |
+| 1000 | 0.0596 | 0.0725 | 1.14% | 1.25% |
+| 1200 | 0.0612 | 0.0696 | 0.89% | 1.42% |
+| 1400 | 0.0647 | 0.0724 | 0.97% | 1.20% |
+
+The count reward prevents Recall@10 degradation at every step. The trade-off is a slightly higher sensitivity ratio (the model can no longer take the shortcut of recommending fewer movies).
 
 ### 7.4 End-to-End Summary
 

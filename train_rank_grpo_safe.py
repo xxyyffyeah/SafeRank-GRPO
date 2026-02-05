@@ -48,6 +48,12 @@ def parse_args():
         help="Checkpoint ID for the supervised fine-tuned (SFT) reference policy.",
     )
     core.add_argument(
+        "--sft_model_path",
+        type=str,
+        default=None,
+        help="Direct path to SFT model. Overrides --model_name/--sft_checkpoint.",
+    )
+    core.add_argument(
         "--reward_func",
         default="log_decay",
         choices=["exp_inf", "log_decay"],
@@ -303,7 +309,10 @@ def main():
         else:
             raise ValueError(f"{args.reward_func} not implemented!")
 
-    sft_model_path = f"./results/{args.model_name}/checkpoint-{args.sft_checkpoint}"
+    if args.sft_model_path:
+        sft_model_path = args.sft_model_path
+    else:
+        sft_model_path = f"./results/{args.model_name}/checkpoint-{args.sft_checkpoint}"
     lora_suffix = f"_lora_r{args.lora_r}" if args.use_lora else ""
     output_dir = (
         f"./results/safe_grpo/{args.model_name}"
@@ -331,8 +340,7 @@ def main():
         adam_beta1=args.adam_beta1,
         adam_beta2=args.adam_beta2,
         beta=args.kl_beta,
-        epsilon=0.06,
-        epsilon_high=0.08,
+        epsilon=0.2,
         output_dir=output_dir,
         per_device_train_batch_size=args.per_device_train_batch_size,
         per_device_eval_batch_size=args.per_device_eval_batch_size,
