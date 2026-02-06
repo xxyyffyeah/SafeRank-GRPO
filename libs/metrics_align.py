@@ -34,7 +34,7 @@ def evaluate_direct_match_aligned(
     year_tolerance: int = 2,
 ):
     recs = item[rec_field]
-    seen_titles = set(item[seen_field])
+    # seen_titles = set(item[seen_field])
     groundtruths = item[gt_field]
 
     norm = title_normalizer or _default_title_normalizer
@@ -54,11 +54,13 @@ def evaluate_direct_match_aligned(
     for pos in range(L):
         rec_title, rec_year = recs[pos]
 
-        if rec_title in seen_titles:
-            continue
+        # Disabled per request: do not filter out seen titles.
+        # if rec_title in seen_titles:
+        #     continue
 
-        if (rec_title, rec_year) not in gt_catalog:
-            continue
+        # Disabled per request: do not require (title, year) to be in catalog.
+        # if (rec_title, rec_year) not in gt_catalog:
+        #     continue
 
         y = _safe_int_year(rec_year)
         if y is None:

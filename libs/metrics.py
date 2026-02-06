@@ -35,7 +35,9 @@ def remove_gt_catalog(rec_list, gt_catalog):
 def evaluate_direct_match(item, k, seen_field, rec_field, gt_field, gt_catalog):
     rec_list_raw = item[rec_field]
     seen_titles = item[seen_field]
-    rec_list_raw = remove_gt_catalog(remove_seen(seen_titles, rec_list_raw), gt_catalog)
+    # Disabled per request: do not require recommendations to exist in gt_catalog.
+    # rec_list_raw = remove_gt_catalog(remove_seen(seen_titles, rec_list_raw), gt_catalog)
+    rec_list_raw = remove_seen(seen_titles, rec_list_raw)
     groundtruths = item[gt_field]
     
     hits = np.zeros(len(rec_list_raw), dtype=int)

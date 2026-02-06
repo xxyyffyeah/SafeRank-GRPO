@@ -339,9 +339,8 @@ def relevance_only_log_decay(
     completions, groundtruth_with_release_year, seen_titles,
     rec_num, gt_catalog, **kwargs,
 ) -> List[List[float]]:
-    """Relevance-only reward (log_decay DCG), no safety penalty."""
+    """Relevance-only reward (binary hit), no safety penalty."""
     rec_num = int(rec_num)
-    discounts = _discounts(rec_num)
     parsed = _parse_and_evaluate(
         completions, groundtruth_with_release_year, seen_titles, rec_num, gt_catalog, **kwargs
     )
@@ -350,11 +349,10 @@ def relevance_only_log_decay(
         if error:
             batch_rewards.append([0.0] * rec_num)
             continue
-        gains = hits * discounts
-        total_dcg = float(gains.sum())
-        prefix_excl = np.concatenate(([0.0], np.cumsum(gains)[:-1]))
-        rewards_rel = total_dcg - prefix_excl
-        batch_rewards.append(rewards_rel.tolist())
+        # Sequence-level binary relevance:
+        # if any recommendation hits GT -> reward 1.0, else 0.0.
+        seq_reward = 1.0 if np.any(hits > 0) else 0.0
+        batch_rewards.append([seq_reward] * rec_num)
     return batch_rewards
 
 
@@ -362,7 +360,7 @@ def relevance_only_exp_inf(
     completions, groundtruth_with_release_year, seen_titles,
     rec_num, gt_catalog, **kwargs,
 ) -> List[List[float]]:
-    """Relevance-only reward (exp_inf hits), no safety penalty."""
+    """Relevance-only reward (binary hit), no safety penalty."""
     rec_num = int(rec_num)
     parsed = _parse_and_evaluate(
         completions, groundtruth_with_release_year, seen_titles, rec_num, gt_catalog, **kwargs
@@ -372,7 +370,8 @@ def relevance_only_exp_inf(
         if error:
             batch_rewards.append([0.0] * rec_num)
             continue
-        batch_rewards.append(hits.tolist())
+        seq_reward = 1.0 if np.any(hits > 0) else 0.0
+        batch_rewards.append([seq_reward] * rec_num)
     return batch_rewards
 
 
