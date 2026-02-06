@@ -5,7 +5,7 @@ from peft import LoraConfig
 import argparse
 
 from libs.data import load_catalog
-from libs.utils import StepLRSchedulerCallback
+from libs.utils import StepLRSchedulerCallback, load_model_with_lora_sft
 from libs.safe_reward_funcs import (
     make_safe_reward_func,
     make_safe_reward_func_individual,
@@ -52,6 +52,17 @@ def parse_args():
         type=str,
         default=None,
         help="Direct path to SFT model. Overrides --model_name/--sft_checkpoint.",
+    )
+    core.add_argument(
+        "--sft_is_lora",
+        action="store_true",
+        help="Set if --sft_model_path is a LoRA adapter checkpoint (not a merged model).",
+    )
+    core.add_argument(
+        "--base_model_path",
+        type=str,
+        default=None,
+        help="Base model path when --sft_is_lora is set. If None, uses --model_name.",
     )
     core.add_argument(
         "--reward_func",
@@ -355,6 +366,27 @@ def main():
         sft_model_path = args.sft_model_path
     else:
         sft_model_path = f"./results/{args.model_name}/checkpoint-{args.sft_checkpoint}"
+
+    # Handle LoRA SFT checkpoint: load base model and merge the adapter
+    model_for_trainer = None
+    if args.sft_is_lora:
+        base_model_path = args.base_model_path or args.model_name
+        accelerator.print(
+            f"[LoRA-SFT] Loading base model: {base_model_path}"
+        )
+        accelerator.print(
+            f"[LoRA-SFT] Merging LoRA adapter from: {sft_model_path}"
+        )
+        model_for_trainer = load_model_with_lora_sft(
+            base_model_path=base_model_path,
+            lora_adapter_path=sft_model_path,
+            torch_dtype="bfloat16" if args.bf16 else "auto",
+        )
+        accelerator.print("[LoRA-SFT] Adapter merged successfully")
+    else:
+        # Use the path directly (merged model or HuggingFace model ID)
+        model_for_trainer = sft_model_path
+
     lora_suffix = f"_lora_r{args.lora_r}" if args.use_lora else ""
     output_dir = (
         f"./results/safe_grpo/{args.model_name}"
@@ -436,7 +468,7 @@ def main():
         )
 
     trainer = RankGRPOTrainer(
-        model=sft_model_path,
+        model=model_for_trainer,
         reward_funcs=reward_func,
         args=config,
         train_dataset=train_dataset,

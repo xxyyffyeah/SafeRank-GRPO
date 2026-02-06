@@ -9,10 +9,12 @@ from time import sleep
 
 import hashlib
 import numpy as np
+import torch
 
 from collections import defaultdict
 from editdistance import eval as distance
-from transformers import TrainerCallback
+from transformers import TrainerCallback, AutoModelForCausalLM
+from peft import PeftModel
 
 def del_parentheses(text):
     pattern = r"\([^()]*\)"
@@ -124,4 +126,52 @@ class StepLRSchedulerCallback(TrainerCallback):
         if logs and "learning_rate" in logs and optimizer is not None:
             logs["learning_rate"] = optimizer.param_groups[0]["lr"]
         return control
+
+
+def load_model_with_lora_sft(
+    base_model_path: str,
+    lora_adapter_path: str,
+    torch_dtype: str = "auto",
+    merge_adapter: bool = True,
+):
+    """
+    Load a base model and apply a LoRA SFT adapter, optionally merging it.
+
+    Args:
+        base_model_path: Path or HuggingFace ID of the base model.
+        lora_adapter_path: Path to the LoRA adapter checkpoint.
+        torch_dtype: Data type for model weights ("auto", "bfloat16", "float16", "float32").
+        merge_adapter: If True, merge the adapter into the base model and unload.
+                       If False, return the PeftModel with adapter applied.
+
+    Returns:
+        The model with LoRA adapter applied (merged or as PeftModel).
+    """
+    # Parse torch_dtype
+    if torch_dtype == "auto":
+        dtype = "auto"
+    elif torch_dtype == "bfloat16":
+        dtype = torch.bfloat16
+    elif torch_dtype == "float16":
+        dtype = torch.float16
+    elif torch_dtype == "float32":
+        dtype = torch.float32
+    else:
+        dtype = "auto"
+
+    # Load base model
+    model = AutoModelForCausalLM.from_pretrained(
+        base_model_path,
+        torch_dtype=dtype,
+        trust_remote_code=True,
+    )
+
+    # Load and apply LoRA adapter
+    model = PeftModel.from_pretrained(model, lora_adapter_path)
+
+    if merge_adapter:
+        # Merge LoRA weights into the base model and unload adapter
+        model = model.merge_and_unload()
+
+    return model
 
