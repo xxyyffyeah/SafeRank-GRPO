@@ -1641,7 +1641,22 @@ class RankGRPOTrainer(Trainer):
 
             # Pad the completions, and concatenate them with the prompts
             completion_ids = [torch.tensor(ids, device=device) for ids in completion_ids]
-            completion_ids = pad(completion_ids, padding_value=self.pad_token_id)
+
+            # Synchronize max completion length across all ranks to ensure uniform tensor shape
+            local_max_len = max(len(ids) for ids in completion_ids) if completion_ids else 0
+            import torch.distributed as dist
+            if dist.is_initialized() and dist.get_world_size() > 1:
+                max_len_tensor = torch.tensor([local_max_len], device=device, dtype=torch.long)
+                dist.all_reduce(max_len_tensor, op=dist.ReduceOp.MAX)
+                global_max_len = max_len_tensor.item()
+                # Manually pad each sequence to global_max_len
+                completion_ids = [
+                    F.pad(ids, (0, global_max_len - len(ids)), value=self.pad_token_id)
+                    for ids in completion_ids
+                ]
+                completion_ids = torch.stack(completion_ids, dim=0)
+            else:
+                completion_ids = pad(completion_ids, padding_value=self.pad_token_id)
             prompt_completion_ids = torch.cat([prompt_ids, completion_ids], dim=1)
 
         elif self.use_transformers_paged:
@@ -1673,7 +1688,21 @@ class RankGRPOTrainer(Trainer):
                     )
             completion_ids = [output.generated_tokens for output in all_outputs.values()]
             completion_ids = [torch.tensor(ids, device=device) for ids in completion_ids]
-            completion_ids = pad(completion_ids, padding_value=self.pad_token_id, padding_side="right")
+
+            # Synchronize max completion length across all ranks to ensure uniform tensor shape
+            import torch.distributed as dist
+            local_max_len = max(len(ids) for ids in completion_ids) if completion_ids else 0
+            if dist.is_initialized() and dist.get_world_size() > 1:
+                max_len_tensor = torch.tensor([local_max_len], device=device, dtype=torch.long)
+                dist.all_reduce(max_len_tensor, op=dist.ReduceOp.MAX)
+                global_max_len = max_len_tensor.item()
+                completion_ids = [
+                    F.pad(ids, (0, global_max_len - len(ids)), value=self.pad_token_id)
+                    for ids in completion_ids
+                ]
+                completion_ids = torch.stack(completion_ids, dim=0)
+            else:
+                completion_ids = pad(completion_ids, padding_value=self.pad_token_id, padding_side="right")
             prompt_ids = [torch.tensor(ids, device=device) for ids in paged_prompt_inputs.input_ids]
             prompt_ids = pad(prompt_ids, padding_value=self.pad_token_id, padding_side="left")
             prompt_completion_ids = torch.cat([prompt_ids, completion_ids], dim=1)

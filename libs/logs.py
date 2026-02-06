@@ -23,11 +23,28 @@ def setup_environment(wandb_project):
     os.environ["WANDB_PROJECT"] = wandb_project
     return accelerator
 
-def setup_wandb(accelerator, output_dir, model_name, sft_checkpoint, seed, project_name):
+def setup_wandb(
+    accelerator,
+    output_dir,
+    model_name,
+    sft_checkpoint,
+    seed,
+    project_name,
+    custom_run_name=None,
+    force_new_run=False,
+):
     if accelerator.is_main_process:
-        wandb_id = _stable_wandb_run_id(output_dir, model_name, sft_checkpoint, seed)
-        run_name = f"{model_name}-sft{sft_checkpoint}-seed{seed}-{datetime.now().strftime('%Y%m%d-%H%M%S')}"
-        wandb.init(project=project_name, id=wandb_id, resume="allow", name=run_name, reinit=True)
+        if force_new_run:
+            wandb_id = wandb.util.generate_id()
+            resume_mode = "never"
+        else:
+            wandb_id = _stable_wandb_run_id(output_dir, model_name, sft_checkpoint, seed)
+            resume_mode = "allow"
+        if custom_run_name:
+            run_name = custom_run_name
+        else:
+            run_name = f"{model_name}-sft{sft_checkpoint}-seed{seed}-{datetime.now().strftime('%Y%m%d-%H%M%S')}"
+        wandb.init(project=project_name, id=wandb_id, resume=resume_mode, name=run_name, reinit=True)
         return run_name
     else:
         os.environ["WANDB_DISABLED"] = "true"

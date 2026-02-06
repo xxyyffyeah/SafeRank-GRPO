@@ -9,3 +9,7 @@ wandb/
 *.log
 /temp.txt
 test.py
+/AGENTS.md
+.current_recall_train_log
+evaluate/figs_saferec/Qwen-Qwen2.5-0.5B-Instruct_loss_curve.png
+

@@ -96,6 +96,13 @@ def parse_args():
         default=10,
         help="Target number of recommendations for the count reward.",
     )
+    safety.add_argument(
+        "--reward_weights",
+        type=float,
+        nargs="+",
+        default=None,
+        help="Weights for each reward function [relevance, safety, count]. Default: equal weights.",
+    )
 
     opt = parser.add_argument_group("Optimization hyperparameters")
     opt.add_argument("--lr", type=float, default=1e-6, help="Initial learning rate.")
@@ -131,6 +138,24 @@ def parse_args():
     )
     sched.add_argument(
         "--num_train_epochs", type=int, default=2, help="Number of training epochs."
+    )
+    sched.add_argument(
+        "--eval_strategy",
+        default="no",
+        choices=["no", "steps", "epoch"],
+        help="Evaluation strategy: no, steps, or epoch.",
+    )
+    sched.add_argument(
+        "--eval_steps",
+        type=int,
+        default=100,
+        help="Evaluate every N steps (only used when eval_strategy=steps).",
+    )
+    sched.add_argument(
+        "--val_path",
+        type=str,
+        default=None,
+        help="Path to validation dataset. If not set, no evaluation is performed.",
     )
     sched.add_argument(
         "--max_steps", type=int, default=-1, help="Max training steps (-1 = use num_train_epochs)."
@@ -196,6 +221,17 @@ def parse_args():
         help="Weights & Biases project name.",
     )
     log.add_argument(
+        "--run_name",
+        type=str,
+        default=None,
+        help="Custom wandb run name. If not set, auto-generated from model/seed/timestamp.",
+    )
+    log.add_argument(
+        "--wandb_force_new_run",
+        action="store_true",
+        help="Force creating a new Weights & Biases run (no resume).",
+    )
+    log.add_argument(
         "--logging_steps", type=int, default=10, help="Logging frequency in steps."
     )
     log.add_argument(
@@ -256,6 +292,12 @@ def main():
 
     gt_catalog = load_catalog(args.catalog_path)
     train_dataset = load_from_disk(os.path.join(args.train_path, "train"))
+
+    # Load validation dataset if specified
+    eval_dataset = None
+    if args.val_path:
+        eval_dataset = load_from_disk(args.val_path)
+        accelerator.print(f"[Eval] Loaded validation dataset: {len(eval_dataset)} samples")
 
     accelerator.print(
         f"[SafetyOracle] Initializing with risk_threshold={args.risk_threshold}"
@@ -327,6 +369,8 @@ def main():
         args.sft_checkpoint,
         args.seed,
         args.wandb_project,
+        args.run_name,
+        args.wandb_force_new_run,
     )
 
     if "0.5B" in args.model_name:
@@ -366,10 +410,15 @@ def main():
         gradient_checkpointing=args.gradient_checkpointing,
         gradient_checkpointing_kwargs={"use_reentrant": False} if args.gradient_checkpointing else None,
         run_name=run_name,
+        reward_weights=args.reward_weights,
+        eval_strategy=args.eval_strategy,
+        eval_steps=args.eval_steps if args.eval_strategy == "steps" else None,
     )
 
     # Pass advantage_mode to trainer via config attribute
     config.advantage_mode = args.advantage_mode
+    if args.reward_weights:
+        accelerator.print(f"[GDPO] Reward weights: {args.reward_weights}")
 
     # Build LoRA config if enabled
     peft_config = None
@@ -391,6 +440,7 @@ def main():
         reward_funcs=reward_func,
         args=config,
         train_dataset=train_dataset,
+        eval_dataset=eval_dataset,
         callbacks=[callback],
         peft_config=peft_config,
     )
