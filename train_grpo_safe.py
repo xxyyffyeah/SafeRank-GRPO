@@ -1,16 +1,31 @@
 import os
 from datasets import load_from_disk
+import argparse
+
+# Compatibility patch: some vLLM versions do not expose GuidedDecodingParams,
+# but TRL's GRPOTrainer imports it at module load time.
+try:
+    import vllm.sampling_params as _vllm_sampling_params
+    if not hasattr(_vllm_sampling_params, "GuidedDecodingParams"):
+        class _GuidedDecodingParamsCompat:
+            pass
+        _vllm_sampling_params.GuidedDecodingParams = _GuidedDecodingParamsCompat
+except Exception:
+    pass
+
 from trl import GRPOConfig, GRPOTrainer
 from peft import LoraConfig
-import argparse
 
 from libs.data import load_catalog
 from libs.utils import StepLRSchedulerCallback, load_model_with_lora_sft
 from libs.safe_reward_funcs import (
     make_relevance_func,
     make_relevance_func_individual,
+    make_safety_func,
+    make_safety_func_individual,
     make_count_func,
 )
+from libs.safety_oracle import create_oracle
 from libs.logs import setup_environment, setup_wandb
 
 
@@ -286,8 +301,11 @@ def parse_args():
     return parser.parse_args()
 
 
-def _to_sequence_reward(item_reward_func):
+def _to_sequence_reward(item_reward_func, reduction: str = "first"):
     """Convert per-rank reward outputs [B, rec_num] to scalar sequence rewards [B]."""
+    if reduction not in {"first", "sum", "mean"}:
+        raise ValueError(f"Unsupported reduction: {reduction}")
+
     def wrapped(completions, groundtruth_with_release_year, seen_titles, **kwargs):
         per_rank = item_reward_func(
             completions=completions,
@@ -295,7 +313,12 @@ def _to_sequence_reward(item_reward_func):
             seen_titles=seen_titles,
             **kwargs,
         )
-        return [float(r[0]) if len(r) > 0 else 0.0 for r in per_rank]
+        if reduction == "first":
+            return [float(r[0]) if len(r) > 0 else 0.0 for r in per_rank]
+        if reduction == "sum":
+            return [float(sum(r)) if len(r) > 0 else 0.0 for r in per_rank]
+        return [float(sum(r) / len(r)) if len(r) > 0 else 0.0 for r in per_rank]
+
     return wrapped
 
 
@@ -312,16 +335,41 @@ def main():
         eval_dataset = load_from_disk(args.val_path)
         accelerator.print(f"[Eval] Loaded validation dataset: {len(eval_dataset)} samples")
 
+    accelerator.print(
+        f"[SafetyOracle] Initializing with risk_threshold={args.risk_threshold}"
+    )
+    safety_oracle = create_oracle(base_path=".", risk_threshold=args.risk_threshold)
+
     # Original GRPO setup: sequence-level rewards only (no per-item advantage updates).
     if args.reward_func == "exp_inf":
         relevance_item_func = make_relevance_func_individual(rec_num=20, gt_catalog=gt_catalog)
+        safety_item_func = make_safety_func_individual(
+            rec_num=20,
+            gt_catalog=gt_catalog,
+            safety_oracle=safety_oracle,
+            lambda_safe=args.lambda_safe,
+            penalty_safe=args.penalty_safe,
+        )
     elif args.reward_func == "log_decay":
         relevance_item_func = make_relevance_func(rec_num=20, gt_catalog=gt_catalog)
+        safety_item_func = make_safety_func(
+            rec_num=20,
+            gt_catalog=gt_catalog,
+            safety_oracle=safety_oracle,
+            lambda_safe=args.lambda_safe,
+            penalty_safe=args.penalty_safe,
+        )
     else:
         raise ValueError(f"{args.reward_func} not implemented!")
 
-    reward_func = [_to_sequence_reward(relevance_item_func)]
-    accelerator.print("[GRPO] Relevance reward: sequence-level binary hit.")
+    reward_func = [
+        _to_sequence_reward(relevance_item_func, reduction="first"),
+        _to_sequence_reward(safety_item_func, reduction="sum"),
+    ]
+    accelerator.print(
+        f"[GRPO] Rewards enabled: relevance(first-rank) + safety(sum), "
+        f"lambda_safe={args.lambda_safe}, penalty_safe={args.penalty_safe}"
+    )
 
     if args.lambda_count > 0:
         count_item_func = make_count_func(
@@ -382,7 +430,7 @@ def main():
     callback = StepLRSchedulerCallback(schedule=schedule, verbose=args.verbose)
 
     config = GRPOConfig(
-        importance_sampling_level="item",
+        importance_sampling_level="sequence",
         adam_beta1=args.adam_beta1,
         adam_beta2=args.adam_beta2,
         beta=args.kl_beta,

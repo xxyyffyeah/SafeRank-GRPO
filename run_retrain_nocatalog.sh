@@ -1,0 +1,40 @@
+#!/usr/bin/env bash
+set -euo pipefail
+CUDA_VISIBLE_DEVICES=0,1 torchrun --nproc_per_node=2 --master_port=29505 train_grpo_safe.py \
+  --train_path ./downloaded_datasets/processed_datasets/saferec_grpo_dataset \
+  --val_path ./downloaded_datasets/processed_datasets/saferec_sft_dataset/validation \
+  --eval_strategy steps \
+  --eval_steps 200 \
+  --model_name Qwen/Qwen2.5-0.5B-Instruct \
+  --sft_model_path ./results/Qwen/Qwen2.5-0.5B-Instruct/checkpoint-800 \
+  --catalog_path gt_catalog_complete.pkl \
+  --reward_func log_decay \
+  --lambda_safe 0.1 \
+  --penalty_safe 1.0 \
+  --lambda_count 1.0 \
+  --target_count 10 \
+  --reward_weights 30 1 1 \
+  --use_lora \
+  --lora_r 256 \
+  --lora_alpha 512 \
+  --lr 1e-6 \
+  --kl_beta 1e-3 \
+  --mu 1 \
+  --per_device_train_batch_size 4 \
+  --gradient_accumulation_steps 8 \
+  --max_steps 1000 \
+  --logging_steps 1 \
+  --save_steps 200 \
+  --bf16 \
+  --use_vllm \
+  --vllm_mode colocate \
+  --vllm_tensor_parallel_size 1 \
+  --vllm_gpu_memory_utilization 0.4 \
+  --num_generations 8 \
+  --max_prompt_length 2048 \
+  --max_completion_length 1024 \
+  --gradient_checkpointing \
+  --wandb_project safe_rank_grpo_recall_eval \
+  --run_name gdpo_tp1_nocatalog_noseen_eval200_$(date +%Y%m%d_%H%M%S) \
+  --wandb_force_new_run \
+  --seed 3407
